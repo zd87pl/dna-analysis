@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 Zygmunt Dyras
+Copyright (c) 2025 Helixight
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,23 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+DISCLAIMER
+
+This software is provided for educational and research purposes only.
+
+The genetic analysis results produced by this software:
+- Are NOT medical diagnoses
+- Should NOT be used for clinical decision-making without professional consultation
+- May contain errors or inaccuracies
+- Do not account for all genetic factors or environmental influences
+
+Always consult with qualified healthcare professionals, genetic counselors, or
+medical geneticists before making any health-related decisions based on
+genetic information.
+
+Genetic predisposition does not equal destiny. Many health outcomes are
+influenced by lifestyle, environment, and multiple genetic and non-genetic
+factors.
