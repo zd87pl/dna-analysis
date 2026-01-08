@@ -217,7 +217,7 @@ def render_sidebar():
         # About
         st.markdown("---")
         st.markdown("### ℹ️ About")
-        st.caption("Version 1.1.0")
+        st.caption("Version 1.2.0")
         st.caption("[GitHub](https://github.com/zd87pl/dna-analysis)")
 
         # System info

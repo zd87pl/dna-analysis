@@ -97,3 +97,49 @@
 ## Neanderthal ancestry markers (educational)
 1	117146318	rs2066807	G	A	100	PASS	RS=rs2066807;GENE=TTLL10;NOTE=Neanderthal_introgression	GT	0/1
 2	109513601	rs6723097	A	G	100	PASS	RS=rs6723097;GENE=EDAR;NOTE=Hair_thickness_Asian	GT	0/0
+## ============================================================================
+## PHARMACOGENOMICS VARIANTS
+## ============================================================================
+## CYP2D6 - Metabolizes ~25% of drugs
+22	42126611	rs3892097	G	A	100	PASS	RS=rs3892097;GENE=CYP2D6;NOTE=Poor_metabolizer	GT	0/1
+22	42130692	rs1065852	G	A	100	PASS	RS=rs1065852;GENE=CYP2D6;NOTE=Reduced_function	GT	0/0
+## CYP2C19 - Clopidogrel, PPIs, SSRIs
+10	94781859	rs4244285	G	A	100	PASS	RS=rs4244285;GENE=CYP2C19;NOTE=Poor_metabolizer_star2	GT	0/1
+10	94761900	rs12248560	C	T	100	PASS	RS=rs12248560;GENE=CYP2C19;NOTE=Rapid_metabolizer_star17	GT	0/0
+## CYP2C9 - Warfarin, NSAIDs
+10	94942290	rs1799853	C	T	100	PASS	RS=rs1799853;GENE=CYP2C9;NOTE=Reduced_warfarin_metabolism	GT	0/1
+10	94981296	rs1057910	A	C	100	PASS	RS=rs1057910;GENE=CYP2C9;NOTE=Reduced_star3	GT	0/0
+## VKORC1 - Warfarin sensitivity
+16	31096368	rs9923231	G	A	100	PASS	RS=rs9923231;GENE=VKORC1;NOTE=Warfarin_sensitivity	GT	0/1
+## SLCO1B1 - Statin transport
+12	21176804	rs4149056	T	C	100	PASS	RS=rs4149056;GENE=SLCO1B1;NOTE=Statin_myopathy_risk	GT	0/0
+## TPMT - Thiopurines
+6	18130918	rs1800462	C	G	100	PASS	RS=rs1800462;GENE=TPMT;NOTE=Reduced_function	GT	0/0
+## NAT2 - Isoniazid, sulfonamides
+8	18257854	rs1801280	T	C	100	PASS	RS=rs1801280;GENE=NAT2;NOTE=Slow_acetylator	GT	0/1
+## OPRM1 - Opioid response
+6	154039662	rs1799971	A	G	100	PASS	RS=rs1799971;GENE=OPRM1;NOTE=Altered_opioid_response	GT	0/0
+## ============================================================================
+## CARRIER SCREENING VARIANTS
+## ============================================================================
+## Hemochromatosis (already in file as HFE variants)
+## Cystic Fibrosis (CFTR) - using common variant positions
+7	117559590	rs113993960	CTT	C	100	PASS	RS=rs113993960;GENE=CFTR;NOTE=CF_deltaF508_proxy	GT	0/0
+## Sickle Cell / Beta-Thalassemia (HBB)
+11	5227002	rs334	T	A	100	PASS	RS=rs334;GENE=HBB;NOTE=Sickle_cell_HbS	GT	0/0
+## Phenylketonuria (PAH)
+12	102840632	rs5030858	G	A	100	PASS	RS=rs5030858;GENE=PAH;NOTE=PKU_variant	GT	0/0
+## Connexin 26 Deafness (GJB2)
+13	20189473	rs80338939	C	A	100	PASS	RS=rs80338939;GENE=GJB2;NOTE=Connexin26_deafness	GT	0/1
+## Gaucher Disease (GBA)
+1	155204867	rs76763715	T	C	100	PASS	RS=rs76763715;GENE=GBA;NOTE=Gaucher_disease	GT	0/0
+## ============================================================================
+## BLOOD TYPE VARIANTS
+## ============================================================================
+## ABO Blood Type
+9	133257521	rs8176719	G	A	100	PASS	RS=rs8176719;GENE=ABO;NOTE=O_allele_marker	GT	0/0
+9	133256264	rs8176746	C	A	100	PASS	RS=rs8176746;GENE=ABO;NOTE=B_allele_marker	GT	0/0
+9	133256042	rs7853989	G	C	100	PASS	RS=rs7853989;GENE=ABO;NOTE=A_vs_B_marker	GT	0/0
+## Rh Factor (RHD)
+1	25362249	rs590787	G	A	100	PASS	RS=rs590787;GENE=RHD;NOTE=Rh_factor_proxy	GT	0/1
+1	25409008	rs676785	C	T	100	PASS	RS=rs676785;GENE=RHD;NOTE=Rh_positive_marker	GT	0/1
