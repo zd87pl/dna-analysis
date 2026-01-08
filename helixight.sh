@@ -3,21 +3,23 @@
 #
 #    ██╗  ██╗███████╗██╗     ██╗██╗  ██╗██╗ ██████╗ ██╗  ██╗████████╗
 #    ██║  ██║██╔════╝██║     ██║╚██╗██╔╝██║██╔════╝ ██║  ██║╚══██╔══╝
-#    ███████║█████╗  ██║     ██║ ╚███╔╝ ██║██║  ███╗███████║   ██║   
-#    ██╔══██║██╔══╝  ██║     ██║ ██╔██╗ ██║██║   ██║██╔══██║   ██║   
-#    ██║  ██║███████╗███████╗██║██╔╝ ██╗██║╚██████╔╝██║  ██║   ██║   
-#    ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   
+#    ███████║█████╗  ██║     ██║ ╚███╔╝ ██║██║  ███╗███████║   ██║
+#    ██╔══██║██╔══╝  ██║     ██║ ██╔██╗ ██║██║   ██║██╔══██║   ██║
+#    ██║  ██║███████╗███████╗██║██╔╝ ██╗██║╚██████╔╝██║  ██║   ██║
+#    ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝
 #
 #    OPEN SOURCE GENETIC ANALYSIS TOOLKIT
 #    From BAM to Actionable Insights
 #
-#    Version: 1.0.0
+#    Version: 1.0.1
 #    License: MIT
 #    Repository: https://github.com/helixight/helixight-oss
 #
 #===============================================================================
 
-VERSION="1.0.0"
+set -o pipefail
+
+VERSION="1.0.1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$SCRIPT_DIR/scripts"
 
@@ -37,6 +39,93 @@ BAM_FILE=""
 REFERENCE=""
 OUTPUT_DIR="helixight_results"
 LANGUAGE="en"
+
+#===============================================================================
+# UTILITY FUNCTIONS
+#===============================================================================
+
+# Validate file path - prevent command injection
+validate_path() {
+    local path="$1"
+    local type="$2"  # "file" or "dir"
+
+    # Check for null bytes or dangerous characters
+    if [[ "$path" =~ [\;\|\&\$\`\(\)\{\}\[\]\<\>] ]]; then
+        echo -e "${RED}Error: Invalid characters in path${NC}" >&2
+        return 1
+    fi
+
+    # Check path exists
+    if [[ "$type" == "file" ]] && [[ ! -f "$path" ]]; then
+        echo -e "${RED}Error: File not found: $path${NC}" >&2
+        return 1
+    elif [[ "$type" == "dir" ]] && [[ ! -d "$path" ]]; then
+        echo -e "${RED}Error: Directory not found: $path${NC}" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+# Validate VCF file format
+validate_vcf() {
+    local vcf="$1"
+
+    if [[ ! -f "$vcf" ]]; then
+        return 1
+    fi
+
+    # Check file extension
+    if [[ ! "$vcf" =~ \.(vcf|vcf\.gz)$ ]]; then
+        echo -e "${YELLOW}Warning: File does not have .vcf or .vcf.gz extension${NC}" >&2
+    fi
+
+    # Basic format check - look for VCF header
+    if [[ "$vcf" =~ \.gz$ ]]; then
+        if ! zcat "$vcf" 2>/dev/null | head -1 | grep -q "^##fileformat=VCF"; then
+            echo -e "${RED}Error: File does not appear to be a valid VCF${NC}" >&2
+            return 1
+        fi
+    else
+        if ! head -1 "$vcf" 2>/dev/null | grep -q "^##fileformat=VCF"; then
+            echo -e "${RED}Error: File does not appear to be a valid VCF${NC}" >&2
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# Validate BAM file format
+validate_bam() {
+    local bam="$1"
+
+    if [[ ! -f "$bam" ]]; then
+        return 1
+    fi
+
+    # Check file extension
+    if [[ ! "$bam" =~ \.bam$ ]]; then
+        echo -e "${YELLOW}Warning: File does not have .bam extension${NC}" >&2
+    fi
+
+    # Use samtools to validate
+    if ! samtools quickcheck "$bam" 2>/dev/null; then
+        echo -e "${RED}Error: File does not appear to be a valid BAM${NC}" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+# Cleanup function for temporary files
+cleanup() {
+    if [[ -n "${TEMP_DIR:-}" ]] && [[ -d "$TEMP_DIR" ]]; then
+        rm -rf "$TEMP_DIR"
+    fi
+}
+
+trap cleanup EXIT
 
 #===============================================================================
 # FUNCTIONS
@@ -261,142 +350,188 @@ download_reference() {
 
 select_vcf() {
     echo -e "\n${YELLOW}$(msg_en "Select VCF File" "Wybierz plik VCF")${NC}\n"
-    
-    # List VCF files in current directory
+
+    # List VCF files in current directory - safe method using find
     echo -e "$(msg_en "VCF files in current directory:" "Pliki VCF w bieżącym katalogu:")"
     echo ""
-    
-    local vcf_files=($(ls -1 *.vcf *.vcf.gz 2>/dev/null))
-    
-    if [ ${#vcf_files[@]} -eq 0 ]; then
+
+    local vcf_files=()
+    while IFS= read -r -d '' file; do
+        vcf_files+=("$file")
+    done < <(find . -maxdepth 1 -type f \( -name "*.vcf" -o -name "*.vcf.gz" \) -print0 2>/dev/null | sort -z)
+
+    if [[ ${#vcf_files[@]} -eq 0 ]]; then
         echo -e "${YELLOW}$(msg_en "No VCF files found in current directory." "Nie znaleziono plików VCF w bieżącym katalogu.")${NC}"
     else
         for i in "${!vcf_files[@]}"; do
-            echo "  $((i+1))) ${vcf_files[$i]}"
+            # Remove leading ./ from path for display
+            local display_name="${vcf_files[$i]#./}"
+            echo "  $((i+1))) $display_name"
         done
     fi
-    
+
     echo ""
-    read -p "$(msg_en "Enter VCF file path (or number from list): " "Podaj ścieżkę do pliku VCF (lub numer z listy): ")" vcf_input
-    
+    read -r -p "$(msg_en "Enter VCF file path (or number from list): " "Podaj ścieżkę do pliku VCF (lub numer z listy): ")" vcf_input
+
+    # Sanitize input - remove leading/trailing whitespace
+    vcf_input="${vcf_input#"${vcf_input%%[![:space:]]*}"}"
+    vcf_input="${vcf_input%"${vcf_input##*[![:space:]]}"}"
+
     # Check if it's a number
-    if [[ "$vcf_input" =~ ^[0-9]+$ ]] && [ "$vcf_input" -le "${#vcf_files[@]}" ] && [ "$vcf_input" -gt 0 ]; then
+    if [[ "$vcf_input" =~ ^[0-9]+$ ]] && [[ "$vcf_input" -le "${#vcf_files[@]}" ]] && [[ "$vcf_input" -gt 0 ]]; then
         VCF_FILE="${vcf_files[$((vcf_input-1))]}"
     else
         VCF_FILE="$vcf_input"
     fi
-    
-    # Validate
-    if [ -f "$VCF_FILE" ]; then
-        echo -e "${GREEN}$(msg_en "VCF file selected:" "Wybrano plik VCF:") $VCF_FILE${NC}"
-        
-        # Quick stats
-        echo ""
-        echo -e "$(msg_en "Quick statistics:" "Szybkie statystyki:")"
-        local total=$(bcftools view -H "$VCF_FILE" 2>/dev/null | wc -l)
-        echo "  $(msg_en "Total variants:" "Całkowita liczba wariantów:") $total"
-    else
-        echo -e "${RED}$(msg_en "File not found:" "Nie znaleziono pliku:") $VCF_FILE${NC}"
+
+    # Validate path for dangerous characters
+    if ! validate_path "$VCF_FILE" "file"; then
         VCF_FILE=""
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return
     fi
-    
-    read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+
+    # Validate VCF format
+    if ! validate_vcf "$VCF_FILE"; then
+        VCF_FILE=""
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return
+    fi
+
+    echo -e "${GREEN}$(msg_en "VCF file selected:" "Wybrano plik VCF:") $VCF_FILE${NC}"
+
+    # Quick stats
+    echo ""
+    echo -e "$(msg_en "Quick statistics:" "Szybkie statystyki:")"
+    local total
+    total=$(bcftools view -H "$VCF_FILE" 2>/dev/null | wc -l)
+    echo "  $(msg_en "Total variants:" "Całkowita liczba wariantów:") $total"
+
+    read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
 }
 
 create_vcf_from_bam() {
     echo -e "\n${YELLOW}$(msg_en "Create VCF from BAM File" "Stwórz VCF z pliku BAM")${NC}\n"
-    
-    read -p "$(msg_en "Enter BAM file path: " "Podaj ścieżkę do pliku BAM: ")" BAM_FILE
-    
-    if [ ! -f "$BAM_FILE" ]; then
-        echo -e "${RED}$(msg_en "BAM file not found!" "Nie znaleziono pliku BAM!")${NC}"
-        read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+
+    read -r -p "$(msg_en "Enter BAM file path: " "Podaj ścieżkę do pliku BAM: ")" BAM_FILE
+
+    # Validate path
+    if ! validate_path "$BAM_FILE" "file"; then
+        BAM_FILE=""
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
         return
     fi
-    
+
+    # Validate BAM format
+    if ! validate_bam "$BAM_FILE"; then
+        BAM_FILE=""
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return
+    fi
+
     # Check for reference
-    if [ -z "$REFERENCE" ] || [ ! -f "$REFERENCE" ]; then
-        read -p "$(msg_en "Enter reference genome path: " "Podaj ścieżkę do genomu referencyjnego: ")" REFERENCE
-        if [ ! -f "$REFERENCE" ]; then
+    if [[ -z "$REFERENCE" ]] || [[ ! -f "$REFERENCE" ]]; then
+        read -r -p "$(msg_en "Enter reference genome path: " "Podaj ścieżkę do genomu referencyjnego: ")" REFERENCE
+        if ! validate_path "$REFERENCE" "file"; then
             echo -e "${RED}$(msg_en "Reference not found! Run option 3 first." "Nie znaleziono referencji! Najpierw uruchom opcję 3.")${NC}"
-            read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+            read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
             return
         fi
     fi
-    
+
     echo ""
     echo -e "${YELLOW}$(msg_en "Select variant calling method:" "Wybierz metodę variant calling:")${NC}"
     echo "  1) bcftools mpileup (fast, good quality)"
     echo "  2) DeepVariant via Docker (best quality, slower)"
     echo "  3) GATK HaplotypeCaller (classic, requires Java)"
-    
-    read -p "$(msg_en "Choice [1]: " "Wybór [1]: ")" method
+
+    read -r -p "$(msg_en "Choice [1]: " "Wybór [1]: ")" method
     method=${method:-1}
-    
-    local output_name=$(basename "$BAM_FILE" .bam)
-    output_name="${output_name}_variants.vcf.gz"
-    
+
+    # Validate method choice
+    if [[ ! "$method" =~ ^[1-3]$ ]]; then
+        method=1
+    fi
+
+    local output_name
+    output_name="$(basename "$BAM_FILE" .bam)_variants.vcf.gz"
+
     echo ""
     echo -e "${CYAN}$(msg_en "Starting variant calling..." "Rozpoczynam variant calling...")${NC}"
     echo -e "$(msg_en "This may take several hours for WGS data." "To może potrwać kilka godzin dla danych WGS.")"
     echo ""
-    
+
     case $method in
         1)
             # bcftools mpileup
+            local THREADS
             THREADS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-            
-            bcftools mpileup \
+
+            if ! bcftools mpileup \
                 -Ou \
                 -f "$REFERENCE" \
-                --threads $THREADS \
+                --threads "$THREADS" \
                 -q 20 \
                 -Q 20 \
                 "$BAM_FILE" | \
             bcftools call \
                 -mv \
-                --threads $THREADS \
+                --threads "$THREADS" \
                 -Oz \
-                -o "$output_name"
-            
-            bcftools index -t "$output_name"
+                -o "$output_name"; then
+                echo -e "${RED}$(msg_en "Variant calling failed!" "Variant calling nie powiodło się!")${NC}"
+                read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+                return
+            fi
+
+            bcftools index -t "$output_name" || true
             ;;
         2)
             # DeepVariant
             if ! command -v docker &> /dev/null; then
                 echo -e "${RED}$(msg_en "Docker not found! Install Docker first." "Docker nie znaleziony! Najpierw zainstaluj Docker.")${NC}"
-                read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+                read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
                 return
             fi
-            
-            docker run \
-                -v "$(pwd):/input" \
-                -v "$(pwd):/output" \
-                -v "$(dirname $REFERENCE):/reference" \
+
+            # Get absolute paths to avoid issues with spaces
+            local abs_bam_dir abs_ref_dir abs_output_dir
+            abs_bam_dir="$(cd "$(dirname "$BAM_FILE")" && pwd)"
+            abs_ref_dir="$(cd "$(dirname "$REFERENCE")" && pwd)"
+            abs_output_dir="$(pwd)"
+
+            if ! docker run \
+                -v "${abs_bam_dir}:/input:ro" \
+                -v "${abs_output_dir}:/output" \
+                -v "${abs_ref_dir}:/reference:ro" \
                 google/deepvariant:latest \
                 /opt/deepvariant/bin/run_deepvariant \
                 --model_type=WGS \
-                --ref="/reference/$(basename $REFERENCE)" \
-                --reads="/input/$(basename $BAM_FILE)" \
+                --ref="/reference/$(basename "$REFERENCE")" \
+                --reads="/input/$(basename "$BAM_FILE")" \
                 --output_vcf="/output/$output_name" \
-                --num_shards=$(nproc)
+                --num_shards="$(nproc 2>/dev/null || echo 4)"; then
+                echo -e "${RED}$(msg_en "DeepVariant failed!" "DeepVariant nie powiodło się!")${NC}"
+                read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+                return
+            fi
             ;;
         3)
             echo -e "${YELLOW}$(msg_en "GATK requires manual setup. See documentation." "GATK wymaga ręcznej konfiguracji. Zobacz dokumentację.")${NC}"
-            read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+            read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
             return
             ;;
     esac
-    
-    if [ -f "$output_name" ]; then
+
+    if [[ -f "$output_name" ]]; then
         VCF_FILE="$output_name"
         echo ""
         echo -e "${GREEN}$(msg_en "VCF created successfully:" "VCF utworzony pomyślnie:") $VCF_FILE${NC}"
     else
         echo -e "${RED}$(msg_en "VCF creation failed!" "Tworzenie VCF nie powiodło się!")${NC}"
     fi
-    
-    read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+
+    read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
 }
 
 run_analysis() {
