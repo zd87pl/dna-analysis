@@ -76,8 +76,8 @@
 
 ```bash
 # Sklonuj repozytorium
-git clone https://github.com/helixight/helixight-oss.git
-cd helixight-oss
+git clone https://github.com/zd87pl/dna-analysis.git
+cd dna-analysis
 
 # Zainstaluj zależności (Ubuntu/Debian)
 sudo apt install bcftools samtools tabix wget
@@ -209,7 +209,7 @@ Kompleksowa eksploracja 500+ wariantów:
 ## 📁 Struktura Projektu
 
 ```
-helixight-oss/
+dna-analysis/
 ├── helixight.sh          # Główny interaktywny launcher
 ├── install.sh            # Szybki instalator
 ├── README.md             # Dokumentacja angielska

@@ -13,7 +13,7 @@
 #
 #    Version: 1.0.1
 #    License: MIT
-#    Repository: https://github.com/helixight/helixight-oss
+#    Repository: https://github.com/zd87pl/dna-analysis
 #
 #===============================================================================
 
@@ -702,7 +702,7 @@ $(msg_en "ANALYSIS DESCRIPTIONS:" "OPISY ANALIZ:")
      - Heart disease, diabetes, Alzheimer's
 
 $(msg_en "MORE INFO:" "WIĘCEJ INFORMACJI:")
-  - GitHub: https://github.com/helixight/helixight-oss
+  - GitHub: https://github.com/zd87pl/dna-analysis
   - Documentation: https://helixight.github.io/docs
 
 EOF

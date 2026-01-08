@@ -218,7 +218,7 @@ def render_sidebar():
         st.markdown("---")
         st.markdown("### ℹ️ About")
         st.caption("Version 1.1.0")
-        st.caption("[GitHub](https://github.com/helixight/helixight-oss)")
+        st.caption("[GitHub](https://github.com/zd87pl/dna-analysis)")
 
         # System info
         with st.expander("System Info"):

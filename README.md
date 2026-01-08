@@ -82,8 +82,8 @@ The easiest way to run Helixight is with Docker - no installation required!
 
 ```bash
 # Clone the repository
-git clone https://github.com/helixight/helixight-oss.git
-cd helixight-oss
+git clone https://github.com/zd87pl/dna-analysis.git
+cd dna-analysis
 
 # Start the web interface
 docker-compose up -d
@@ -131,8 +131,8 @@ Analysis results are saved to the `results/` directory.
 
 ```bash
 # Clone the repository
-git clone https://github.com/helixight/helixight-oss.git
-cd helixight-oss
+git clone https://github.com/zd87pl/dna-analysis.git
+cd dna-analysis
 
 # Install dependencies (Ubuntu/Debian)
 sudo apt install bcftools samtools tabix wget
@@ -271,7 +271,7 @@ Comprehensive exploration of 500+ variants:
 ## 📁 Project Structure
 
 ```
-helixight-oss/
+dna-analysis/
 ├── helixight.sh          # Main interactive CLI launcher
 ├── install.sh            # Quick installer for CLI
 ├── Dockerfile            # Docker container definition
