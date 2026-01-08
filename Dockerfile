@@ -58,13 +58,14 @@ COPY docs/ /app/docs/
 RUN chmod +x /app/helixight.sh \
     && chmod +x /app/scripts/*.sh
 
-# Create data directory for volume mount
-RUN mkdir -p /data
+# Create data and results directories for volume mounts
+RUN mkdir -p /data /app/results
 
 # Set environment variables
 ENV HELIXIGHT_HOME=/app
 ENV SCRIPTS_DIR=/app/scripts
 ENV DATA_DIR=/data
+ENV RESULTS_DIR=/app/results
 
 # Expose Streamlit port
 EXPOSE 8501

@@ -98,34 +98,47 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("### 📁 Data Management")
 
-        # File upload
+        # File upload - accept vcf and gz extensions (covers .vcf.gz files)
         uploaded_file = st.file_uploader(
             "Upload VCF File",
             type=['vcf', 'gz'],
-            help="Upload a VCF or VCF.gz file containing your genetic variants"
+            help="Upload a VCF (.vcf) or compressed VCF (.vcf.gz) file"
         )
 
         if uploaded_file:
-            # Save uploaded file
-            file_path = os.path.join(DATA_DIR, uploaded_file.name)
-            with open(file_path, 'wb') as f:
-                f.write(uploaded_file.getbuffer())
-
-            # Validate
-            is_valid, message = AnalysisRunner.validate_vcf(file_path)
-            if is_valid:
-                st.session_state.vcf_path = file_path
-                st.session_state.vcf_info = message
-                st.success(f"✅ {message}")
+            # Validate filename pattern (must be .vcf or .vcf.gz)
+            filename = uploaded_file.name
+            if not (filename.endswith('.vcf') or filename.endswith('.vcf.gz')):
+                st.error("❌ File must be a VCF file (.vcf or .vcf.gz)")
             else:
-                st.error(f"❌ {message}")
-                os.remove(file_path)
+                # Save uploaded file
+                file_path = os.path.join(DATA_DIR, filename)
+                with open(file_path, 'wb') as f:
+                    f.write(uploaded_file.getbuffer())
+
+                # Validate
+                is_valid, message = AnalysisRunner.validate_vcf(file_path)
+                if is_valid:
+                    st.session_state.vcf_path = file_path
+                    st.session_state.vcf_info = message
+                    st.success(f"✅ {message}")
+                else:
+                    st.error(f"❌ {message}")
+                    try:
+                        os.remove(file_path)
+                    except OSError:
+                        pass  # Ignore removal errors
 
         # Or select existing file
         st.markdown("---")
         st.markdown("**Or select existing file:**")
 
-        vcf_files = list(Path(DATA_DIR).glob("*.vcf*"))
+        # Find VCF files (both .vcf and .vcf.gz)
+        vcf_files = sorted(
+            list(Path(DATA_DIR).glob("*.vcf")) + list(Path(DATA_DIR).glob("*.vcf.gz")),
+            key=lambda f: f.stat().st_mtime,
+            reverse=True
+        )
         if vcf_files:
             file_options = ["Select a file..."] + [f.name for f in vcf_files]
             selected = st.selectbox("Available VCF files", file_options)
@@ -285,13 +298,21 @@ def render_results():
 
     st.markdown("---")
 
-    # Detailed results in tabs
-    tabs = st.tabs([AnalysisRunner.ANALYSES[aid]['icon'] + " " + AnalysisRunner.ANALYSES[aid]['name']
-                   for aid in st.session_state.results.keys()])
+    # Detailed results in tabs - filter to valid analysis IDs
+    valid_results = {
+        aid: result for aid, result in st.session_state.results.items()
+        if aid in AnalysisRunner.ANALYSES
+    }
 
-    for tab, (analysis_id, result) in zip(tabs, st.session_state.results.items()):
-        with tab:
-            render_single_result(analysis_id, result)
+    if valid_results:
+        tabs = st.tabs([
+            AnalysisRunner.ANALYSES[aid]['icon'] + " " + AnalysisRunner.ANALYSES[aid]['name']
+            for aid in valid_results.keys()
+        ])
+
+        for tab, (analysis_id, result) in zip(tabs, valid_results.items()):
+            with tab:
+                render_single_result(analysis_id, result)
 
 
 def render_single_result(analysis_id: str, result):
@@ -389,14 +410,15 @@ def render_report_download():
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("📥 Download Text Report", use_container_width=True):
-            report = generate_text_report()
-            st.download_button(
-                "💾 Save Report",
-                report,
-                file_name=f"helixight_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                mime="text/plain"
-            )
+        # Generate report and provide direct download button (not nested)
+        report = generate_text_report()
+        st.download_button(
+            "📥 Download Text Report",
+            report,
+            file_name=f"helixight_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            mime="text/plain",
+            use_container_width=True
+        )
 
     with col2:
         st.button("📥 Download PDF Report", use_container_width=True, disabled=True,
@@ -405,13 +427,14 @@ def render_report_download():
 
 def generate_text_report() -> str:
     """Generate a text report from results"""
+    vcf_name = os.path.basename(st.session_state.vcf_path) if st.session_state.vcf_path else "Unknown"
     lines = [
         "=" * 80,
         "                    HELIXIGHT GENETIC ANALYSIS REPORT",
         f"                    Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "=" * 80,
         "",
-        f"VCF File: {os.path.basename(st.session_state.vcf_path)}",
+        f"VCF File: {vcf_name}",
         f"Analyses Run: {len(st.session_state.results)}",
         "",
         "=" * 80,

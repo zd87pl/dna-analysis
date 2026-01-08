@@ -10,7 +10,7 @@ import json
 import threading
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Dict, List, Any
+from typing import Optional, Callable, Dict, List, Any, Tuple
 from enum import Enum
 
 
@@ -173,10 +173,21 @@ class AnalysisRunner:
                 cwd=self.RESULTS_DIR
             )
 
-            stdout, stderr = process.communicate()
+            # Check cancel flag during execution with timeout polling
+            try:
+                stdout, stderr = process.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                if self._cancel_flag.is_set():
+                    process.kill()
+                    process.wait()
+                    result.status = AnalysisStatus.FAILED
+                    result.error = "Analysis cancelled"
+                    return result
+                # Continue waiting if not cancelled
+                stdout, stderr = process.communicate()
 
+            # Final check after completion
             if self._cancel_flag.is_set():
-                process.kill()
                 result.status = AnalysisStatus.FAILED
                 result.error = "Analysis cancelled"
                 return result
@@ -271,7 +282,7 @@ class AnalysisRunner:
         return categories
 
     @classmethod
-    def validate_vcf(cls, file_path: str) -> tuple[bool, str]:
+    def validate_vcf(cls, file_path: str) -> Tuple[bool, str]:
         """Validate a VCF file"""
         if not os.path.exists(file_path):
             return False, "File not found"
@@ -311,14 +322,14 @@ def get_system_info() -> Dict[str, str]:
     try:
         result = subprocess.run(['bcftools', '--version'], capture_output=True, text=True)
         info['bcftools'] = result.stdout.split('\n')[0] if result.returncode == 0 else 'Not found'
-    except:
+    except (OSError, subprocess.SubprocessError):
         info['bcftools'] = 'Not found'
 
     # samtools version
     try:
         result = subprocess.run(['samtools', '--version'], capture_output=True, text=True)
         info['samtools'] = result.stdout.split('\n')[0] if result.returncode == 0 else 'Not found'
-    except:
+    except (OSError, subprocess.SubprocessError):
         info['samtools'] = 'Not found'
 
     return info
