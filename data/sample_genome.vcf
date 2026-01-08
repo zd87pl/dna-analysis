@@ -1,0 +1,99 @@
+##fileformat=VCFv4.2
+##fileDate=20240101
+##source=Helixight-SampleData
+##reference=GRCh38
+##INFO=<ID=RS,Number=1,Type=String,Description="dbSNP ID">
+##INFO=<ID=GENE,Number=1,Type=String,Description="Gene symbol">
+##INFO=<ID=NOTE,Number=1,Type=String,Description="Variant note">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##contig=<ID=1,length=248956422>
+##contig=<ID=2,length=242193529>
+##contig=<ID=3,length=198295559>
+##contig=<ID=4,length=190214555>
+##contig=<ID=5,length=181538259>
+##contig=<ID=6,length=170805979>
+##contig=<ID=7,length=159345973>
+##contig=<ID=8,length=145138636>
+##contig=<ID=9,length=138394717>
+##contig=<ID=10,length=133797422>
+##contig=<ID=11,length=135086622>
+##contig=<ID=12,length=133275309>
+##contig=<ID=13,length=114364328>
+##contig=<ID=14,length=107043718>
+##contig=<ID=15,length=101991189>
+##contig=<ID=16,length=90338345>
+##contig=<ID=17,length=83257441>
+##contig=<ID=18,length=80373285>
+##contig=<ID=19,length=58617616>
+##contig=<ID=20,length=64444167>
+##contig=<ID=21,length=46709983>
+##contig=<ID=22,length=50818468>
+##SAMPLE=<ID=SAMPLE001,Description="Helixight Demo Sample">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE001
+## Athletic Genetics Variants
+11	66560624	rs1815739	C	T	100	PASS	RS=rs1815739;GENE=ACTN3;NOTE=Sprint_power_variant	GT	0/1
+17	63477061	rs4994	C	G	100	PASS	RS=rs4994;GENE=ADRB3;NOTE=Endurance_metabolism	GT	0/0
+17	63488530	rs1042713	G	A	100	PASS	RS=rs1042713;GENE=ADRB2;NOTE=Cardiovascular_response	GT	0/1
+4	111563823	rs4253778	G	C	100	PASS	RS=rs4253778;GENE=PPARA;NOTE=Fat_metabolism	GT	1/1
+22	19963748	rs5443	C	T	100	PASS	RS=rs5443;GENE=GNB3;NOTE=Metabolic_efficiency	GT	0/1
+1	230845794	rs1799752	A	G	100	PASS	RS=rs1799752;GENE=ACE;NOTE=Endurance_capacity	GT	0/1
+4	3473139	rs4994	A	G	100	PASS	RS=rs4994;GENE=PPARGC1A;NOTE=Mitochondrial_biogenesis	GT	0/1
+7	75614497	rs1800795	G	C	100	PASS	RS=rs1800795;GENE=IL6;NOTE=Recovery_inflammation	GT	0/1
+## COMT - Warrior/Worrier
+22	19963748	rs4680	G	A	100	PASS	RS=rs4680;GENE=COMT;NOTE=Stress_response_warrior_worrier	GT	0/1
+## Caffeine Metabolism
+15	74749576	rs762551	A	C	100	PASS	RS=rs762551;GENE=CYP1A2;NOTE=Caffeine_metabolism	GT	1/1
+## MTHFR Variants
+1	11856378	rs1801133	C	T	100	PASS	RS=rs1801133;GENE=MTHFR;NOTE=Folate_metabolism_C677T	GT	0/1
+1	11854476	rs1801131	A	C	100	PASS	RS=rs1801131;GENE=MTHFR;NOTE=Folate_metabolism_A1298C	GT	0/0
+## VDR - Vitamin D
+12	47879112	rs1544410	C	T	100	PASS	RS=rs1544410;GENE=VDR;NOTE=Vitamin_D_receptor	GT	0/1
+12	47846052	rs2228570	C	T	100	PASS	RS=rs2228570;GENE=VDR;NOTE=Vitamin_D_receptor_FokI	GT	0/1
+## Lactose Tolerance
+2	135851076	rs4988235	G	A	100	PASS	RS=rs4988235;GENE=MCM6;NOTE=Lactose_tolerance	GT	0/1
+## Alcohol Metabolism
+12	111803962	rs671	G	A	100	PASS	RS=rs671;GENE=ALDH2;NOTE=Alcohol_flush_reaction	GT	0/0
+4	99318162	rs1229984	T	C	100	PASS	RS=rs1229984;GENE=ADH1B;NOTE=Alcohol_metabolism_speed	GT	0/1
+## Eye Color
+15	28120472	rs12913832	A	G	100	PASS	RS=rs12913832;GENE=HERC2;NOTE=Eye_color_blue_brown	GT	0/1
+15	28356859	rs1800407	C	T	100	PASS	RS=rs1800407;GENE=OCA2;NOTE=Eye_color_modifier	GT	0/0
+## Hair
+16	89736156	rs1805007	C	T	100	PASS	RS=rs1805007;GENE=MC1R;NOTE=Red_hair_variant	GT	0/0
+16	89736186	rs1805008	C	T	100	PASS	RS=rs1805008;GENE=MC1R;NOTE=Red_hair_variant_2	GT	0/0
+## Bitter Taste (Cilantro)
+7	141972804	rs72921001	A	G	100	PASS	RS=rs72921001;GENE=OR6A2;NOTE=Cilantro_soapy_taste	GT	0/1
+## Earwax Type
+16	48224287	rs17822931	C	T	100	PASS	RS=rs17822931;GENE=ABCC11;NOTE=Earwax_type_wet_dry	GT	0/1
+## Muscle Composition
+11	66560624	rs1815739	C	T	100	PASS	RS=rs1815739;GENE=ACTN3;NOTE=Fast_twitch_muscle	GT	0/1
+## Sleep/Circadian
+4	56296720	rs57875989	A	G	100	PASS	RS=rs57875989;GENE=CLOCK;NOTE=Circadian_rhythm	GT	0/0
+15	74219546	rs10830963	C	G	100	PASS	RS=rs10830963;GENE=MTNR1B;NOTE=Melatonin_receptor	GT	0/1
+## Pain Sensitivity
+6	154360797	rs6269	G	A	100	PASS	RS=rs6269;GENE=COMT;NOTE=Pain_sensitivity	GT	0/1
+## Sprinter/Endurance
+11	66560624	rs1815739	C	T	100	PASS	RS=rs1815739;GENE=ACTN3;NOTE=Power_vs_endurance	GT	0/1
+## VO2max related
+4	3473139	rs8192678	C	T	100	PASS	RS=rs8192678;GENE=PPARGC1A;NOTE=VO2max_trainability	GT	0/1
+## Injury Risk
+9	116908947	rs12722	C	T	100	PASS	RS=rs12722;GENE=COL5A1;NOTE=Tendon_injury_risk	GT	0/0
+12	189639285	rs240736	C	T	100	PASS	RS=rs240736;GENE=COL2A1;NOTE=Cartilage_health	GT	0/1
+## Blood Clotting (Factor V)
+1	169549811	rs6025	G	A	100	PASS	RS=rs6025;GENE=F5;NOTE=Factor_V_Leiden	GT	0/0
+## Hemochromatosis
+6	26091179	rs1800562	G	A	100	PASS	RS=rs1800562;GENE=HFE;NOTE=Hemochromatosis_C282Y	GT	0/0
+6	26090951	rs1799945	C	G	100	PASS	RS=rs1799945;GENE=HFE;NOTE=Hemochromatosis_H63D	GT	0/1
+## Apolipoprotein E (Alzheimer risk marker)
+19	44908684	rs429358	T	C	100	PASS	RS=rs429358;GENE=APOE;NOTE=APOE_e4_marker	GT	0/0
+19	44908822	rs7412	C	T	100	PASS	RS=rs7412;GENE=APOE;NOTE=APOE_e2_marker	GT	0/0
+## Asparagus smell detection
+1	247587572	rs4481887	G	A	100	PASS	RS=rs4481887;GENE=OR2M7;NOTE=Asparagus_urine_smell	GT	0/1
+## Sneezing from sunlight (photic sneeze)
+2	136407479	rs10427255	C	T	100	PASS	RS=rs10427255;GENE=ZEB2;NOTE=Photic_sneeze_reflex	GT	0/1
+## Baldness
+20	22162468	rs2180439	C	T	100	PASS	RS=rs2180439;GENE=AR;NOTE=Male_pattern_baldness	GT	0/0
+## Freckles
+6	396321	rs1805007	C	T	100	PASS	RS=rs1805007;GENE=IRF4;NOTE=Freckling_tendency	GT	0/1
+## Neanderthal ancestry markers (educational)
+1	117146318	rs2066807	G	A	100	PASS	RS=rs2066807;GENE=TTLL10;NOTE=Neanderthal_introgression	GT	0/1
+2	109513601	rs6723097	A	G	100	PASS	RS=rs6723097;GENE=EDAR;NOTE=Hair_thickness_Asian	GT	0/0

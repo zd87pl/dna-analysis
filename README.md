@@ -1,6 +1,6 @@
 # 🧬 Helixight - Open Source Genetic Analysis Toolkit
 
-**Version 1.0.1**
+**Version 1.1.0**
 
 <p align="center">
   <strong>From BAM to Actionable Insights</strong><br>
@@ -276,6 +276,7 @@ helixight-oss/
 ├── install.sh            # Quick installer for CLI
 ├── Dockerfile            # Docker container definition
 ├── docker-compose.yml    # Docker Compose configuration
+├── pytest.ini            # Pytest configuration
 ├── README.md             # English documentation
 ├── README_PL.md          # Polish documentation
 ├── LICENSE               # MIT License
@@ -290,8 +291,14 @@ helixight-oss/
 ├── frontend/             # Web interface (Streamlit)
 │   ├── app.py            # Main Streamlit application
 │   ├── analysis.py       # Python wrapper for scripts
+│   ├── pdf_report.py     # PDF report generator
 │   └── requirements.txt  # Python dependencies
+├── tests/                # Unit test suite
+│   ├── test_analysis.py  # Analysis module tests
+│   ├── test_pdf_report.py# PDF generation tests
+│   └── requirements.txt  # Test dependencies
 ├── data/                 # Place your VCF files here
+│   └── sample_genome.vcf # Sample test data
 ├── results/              # Analysis results output
 └── docs/
     └── variant_database.md
@@ -323,12 +330,24 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [x] Web interface ✅
 - [x] Docker container ✅
 - [ ] Additional language support
-- [ ] PDF report generation
+- [x] PDF report generation ✅
+- [x] VCF quality metrics ✅
+- [x] Result caching ✅
+- [x] Sample test data ✅
 - [ ] Interactive result charts
 
 ---
 
 ## 📝 Changelog
+
+### v1.1.0
+- **Feature**: PDF report generation with professional formatting and charts
+- **Feature**: VCF quality metrics display (variant counts, Ti/Tv ratio, genotype distribution)
+- **Feature**: Result caching to avoid re-running analyses on the same file
+- **Feature**: Sample VCF test data (`data/sample_genome.vcf`) with 40+ variants
+- **Feature**: Unit test suite with pytest for analysis and PDF modules
+- **Improvement**: Cache toggle in settings UI
+- **Improvement**: Clear cache button for manual cache management
 
 ### v1.0.1
 - **Security**: Fixed command injection vulnerabilities in shell scripts
