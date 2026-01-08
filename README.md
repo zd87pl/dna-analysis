@@ -1,6 +1,6 @@
 # 🧬 Helixight - Open Source Genetic Analysis Toolkit
 
-**Version 1.1.0**
+**Version 1.2.0**
 
 <p align="center">
   <strong>From BAM to Actionable Insights</strong><br>
@@ -67,6 +67,9 @@
 | 🏃 **Athletic Genetics** | Muscle fiber type, endurance potential | ACTN3, ACE, PPARGC1A |
 | 🏊 **Triathlon Predisposition** | VO2max, fat metabolism, injury risk | Sprint vs Ironman tendencies |
 | 💊 **Personalized Insights** | Training style, supplement ideas, nutrition | Based on MTHFR, COMT, CYP1A2 |
+| 💉 **Pharmacogenomics** | Drug metabolism, medication response | CYP2D6, CYP2C19, VKORC1 |
+| 🧪 **Carrier Screening** | Recessive disease carrier status | CF, sickle cell, Tay-Sachs |
+| 🩸 **Blood Type Prediction** | ABO and Rh factor from genetics | Blood type, transfusion compatibility |
 | 🧬 **Comprehensive Analysis** | 500+ variants across 16 domains | Pharmacogenomics, traits |
 | 🔬 **Variant Exploration** | Known significant variants | Research-grade exploration |
 | 📊 **Polygenic Scores** | Combined variant effects | Educational risk exploration |
@@ -339,6 +342,13 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ---
 
 ## 📝 Changelog
+
+### v1.2.0
+- **Feature**: Pharmacogenomics (PGx) analysis - drug metabolism genetics (CYP2D6, CYP2C19, CYP2C9, VKORC1, etc.)
+- **Feature**: Carrier Screening - recessive disease carrier status (CF, sickle cell, Tay-Sachs, etc.)
+- **Feature**: Blood Type Prediction - ABO and Rh factor from genetic variants
+- **Improvement**: Expanded sample VCF with 70+ variants for testing all analyses
+- **Improvement**: Now 14 analysis modules available
 
 ### v1.1.0
 - **Feature**: PDF report generation with professional formatting and charts

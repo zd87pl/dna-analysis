@@ -138,6 +138,27 @@ class AnalysisRunner:
             "description": "Mitochondrial DNA ancestry analysis",
             "icon": "🌍",
             "category": "advanced"
+        },
+        "pharmacogenomics": {
+            "script": "pharmacogenomics.sh",
+            "name": "Pharmacogenomics (PGx)",
+            "description": "Drug metabolism and medication response genetics",
+            "icon": "💉",
+            "category": "health"
+        },
+        "carrier_screening": {
+            "script": "carrier_screening.sh",
+            "name": "Carrier Screening",
+            "description": "Recessive disease carrier status analysis",
+            "icon": "🧪",
+            "category": "health"
+        },
+        "blood_type": {
+            "script": "blood_type.sh",
+            "name": "Blood Type Prediction",
+            "description": "ABO and Rh blood type prediction from genetics",
+            "icon": "🩸",
+            "category": "fun"
         }
     }
 
