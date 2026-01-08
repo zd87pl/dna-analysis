@@ -74,6 +74,53 @@
 
 ## 🚀 Quick Start
 
+### Option 1: Docker (Recommended) 🐳
+
+The easiest way to run Helixight is with Docker - no installation required!
+
+```bash
+# Clone the repository
+git clone https://github.com/helixight/helixight-oss.git
+cd helixight-oss
+
+# Start the web interface
+docker-compose up -d
+
+# Open http://localhost:8501 in your browser
+```
+
+That's it! The web interface will be available at **http://localhost:8501**
+
+<p align="center">
+  <img src="docs/screenshot.png" alt="Helixight Web Interface" width="600">
+</p>
+
+#### Docker Usage Tips
+
+```bash
+# View logs
+docker-compose logs -f
+
+# Stop the container
+docker-compose down
+
+# Rebuild after updates
+docker-compose build --no-cache
+docker-compose up -d
+```
+
+#### Adding Your Data
+
+Place your VCF files in the `data/` directory, or upload them through the web interface:
+
+```bash
+cp your_variants.vcf.gz ./data/
+```
+
+---
+
+### Option 2: Command Line Installation
+
 ```bash
 # Clone the repository
 git clone https://github.com/helixight/helixight-oss.git
@@ -92,6 +139,13 @@ sudo apt install bcftools samtools tabix wget
 ---
 
 ## 📦 Requirements
+
+### For Docker (Recommended)
+- Docker Engine 20.10+
+- Docker Compose v2.0+
+- 4GB RAM minimum (8GB recommended for large VCF files)
+
+### For CLI Installation
 
 | Tool | Purpose | Install |
 |------|---------|---------|
@@ -210,18 +264,27 @@ Comprehensive exploration of 500+ variants:
 
 ```
 helixight-oss/
-├── helixight.sh          # Main interactive launcher
-├── install.sh            # Quick installer
+├── helixight.sh          # Main interactive CLI launcher
+├── install.sh            # Quick installer for CLI
+├── Dockerfile            # Docker container definition
+├── docker-compose.yml    # Docker Compose configuration
 ├── README.md             # English documentation
 ├── README_PL.md          # Polish documentation
 ├── LICENSE               # MIT License
-├── scripts/              # Analysis scripts
+├── scripts/              # Analysis scripts (22 scripts)
 │   ├── athletic_genetics.sh
 │   ├── triathlon_genetics.sh
 │   ├── personalized_protocol.sh
 │   ├── mega_analysis.sh
-│   ├── fun_genetics.sh
-│   └── ... (20+ scripts)
+│   ├── clinvar_scan.sh
+│   ├── cancer_genes_scan.sh
+│   └── ... (more scripts)
+├── frontend/             # Web interface (Streamlit)
+│   ├── app.py            # Main Streamlit application
+│   ├── analysis.py       # Python wrapper for scripts
+│   └── requirements.txt  # Python dependencies
+├── data/                 # Place your VCF files here
+├── results/              # Analysis results output
 └── docs/
     └── variant_database.md
 ```
@@ -249,9 +312,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Additional genetic variants with citations
 - [ ] More analysis scripts
 - [ ] Improved visualizations
-- [ ] Web interface
-- [ ] Docker container
+- [x] Web interface ✅
+- [x] Docker container ✅
 - [ ] Additional language support
+- [ ] PDF report generation
+- [ ] Interactive result charts
 
 ---
 

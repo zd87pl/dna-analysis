@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  helixight:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: helixight
+    ports:
+      - "8501:8501"
+    volumes:
+      # Mount your data directory containing VCF/BAM files
+      - ./data:/data
+      # Mount results directory for persistent output
+      - ./results:/app/results
+    environment:
+      - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=5000
+      - HELIXIGHT_LANGUAGE=en
+    restart: unless-stopped
+    # Resource limits (adjust based on your system)
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 2G
+
+# Optional: Add volume for reference genomes (large files)
+# Uncomment if you want to persist reference downloads
+#   - ./reference:/app/reference

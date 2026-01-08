@@ -1,0 +1,59 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+LICENSE
+
+# Data directories (mounted as volumes)
+data/
+results/
+reference/
+
+# Analysis output directories
+*_analysis/
+*_results/
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+*.env
+
+# Large genomic files (should be mounted as volumes)
+*.bam
+*.bam.bai
+*.vcf
+*.vcf.gz
+*.vcf.gz.tbi
+*.fa
+*.fa.fai
+*.fasta
+*.fasta.fai

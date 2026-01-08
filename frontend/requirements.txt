@@ -1,0 +1,22 @@
+# Helixight Frontend Dependencies
+
+# Web framework
+streamlit>=1.29.0
+
+# Data handling
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualization
+plotly>=5.18.0
+altair>=5.2.0
+
+# File handling
+python-magic>=0.4.27
+
+# PDF report generation
+fpdf2>=2.7.0
+Pillow>=10.0.0
+
+# Utilities
+python-dotenv>=1.0.0
