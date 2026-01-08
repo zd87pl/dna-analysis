@@ -12,7 +12,11 @@ from datetime import datetime
 import plotly.graph_objects as go
 import plotly.express as px
 
-from analysis import AnalysisRunner, AnalysisStatus, get_system_info
+from analysis import (
+    AnalysisRunner, AnalysisStatus, get_system_info,
+    get_vcf_metrics, VCFMetrics, _result_cache
+)
+from pdf_report import generate_pdf_report
 
 # Page configuration
 st.set_page_config(
@@ -81,10 +85,14 @@ def init_session_state():
         st.session_state.vcf_path = None
     if 'vcf_info' not in st.session_state:
         st.session_state.vcf_info = None
+    if 'vcf_metrics' not in st.session_state:
+        st.session_state.vcf_metrics = None
     if 'results' not in st.session_state:
         st.session_state.results = {}
     if 'language' not in st.session_state:
         st.session_state.language = 'en'
+    if 'use_cache' not in st.session_state:
+        st.session_state.use_cache = True
 
 
 def render_header():
@@ -121,6 +129,9 @@ def render_sidebar():
                 if is_valid:
                     st.session_state.vcf_path = file_path
                     st.session_state.vcf_info = message
+                    # Calculate VCF metrics
+                    with st.spinner("Calculating VCF metrics..."):
+                        st.session_state.vcf_metrics = get_vcf_metrics(file_path)
                     st.success(f"✅ {message}")
                 else:
                     st.error(f"❌ {message}")
@@ -150,6 +161,8 @@ def render_sidebar():
                     if is_valid:
                         st.session_state.vcf_path = file_path
                         st.session_state.vcf_info = message
+                        # Calculate VCF metrics
+                        st.session_state.vcf_metrics = get_vcf_metrics(file_path)
                         st.success(f"✅ Loaded: {selected}")
                         st.rerun()
                     else:
@@ -163,6 +176,22 @@ def render_sidebar():
         if st.session_state.vcf_path:
             st.success(f"**{os.path.basename(st.session_state.vcf_path)}**")
             st.caption(st.session_state.vcf_info)
+
+            # Display VCF metrics if available
+            if st.session_state.vcf_metrics:
+                metrics = st.session_state.vcf_metrics
+                with st.expander("📈 VCF Quality Metrics", expanded=False):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("Total Variants", f"{metrics.total_variants:,}")
+                        st.metric("SNPs", f"{metrics.snps:,}")
+                        st.metric("Indels", f"{metrics.indels:,}")
+                    with col2:
+                        st.metric("Heterozygous", f"{metrics.heterozygous:,}")
+                        st.metric("Homozygous Alt", f"{metrics.homozygous_alt:,}")
+                        if metrics.titv_ratio > 0:
+                            st.metric("Ti/Tv Ratio", f"{metrics.titv_ratio:.2f}")
+                    st.caption(f"File size: {metrics.file_size_mb:.2f} MB")
         else:
             st.warning("No file loaded")
 
@@ -175,10 +204,20 @@ def render_sidebar():
             format_func=lambda x: "English" if x == "en" else "Polski"
         )
 
+        st.session_state.use_cache = st.checkbox(
+            "Use result caching",
+            value=st.session_state.use_cache,
+            help="Cache analysis results to avoid re-running on the same file"
+        )
+
+        if st.button("Clear Cache", help="Clear all cached analysis results"):
+            _result_cache.clear()
+            st.success("Cache cleared!")
+
         # About
         st.markdown("---")
         st.markdown("### ℹ️ About")
-        st.caption("Version 1.0.1")
+        st.caption("Version 1.1.0")
         st.caption("[GitHub](https://github.com/helixight/helixight-oss)")
 
         # System info
@@ -245,10 +284,15 @@ def run_analyses(selected: list):
     progress_bar = st.progress(0, text="Initializing...")
     status_text = st.empty()
 
-    runner = AnalysisRunner(st.session_state.vcf_path)
+    # Use caching based on user preference
+    runner = AnalysisRunner(
+        st.session_state.vcf_path,
+        use_cache=st.session_state.use_cache
+    )
 
     results = {}
     total = len(selected)
+    cached_count = 0
 
     for i, analysis_id in enumerate(selected):
         analysis_info = AnalysisRunner.ANALYSES.get(analysis_id, {})
@@ -262,11 +306,17 @@ def run_analyses(selected: list):
         results[analysis_id] = result
 
         if result.status == AnalysisStatus.COMPLETED:
+            # Check if this was loaded from cache
+            if st.session_state.use_cache and analysis_id in runner.results:
+                cached_count += 1
             status_text.success(f"✅ Completed: {analysis_name}")
         else:
             status_text.error(f"❌ Failed: {analysis_name}")
 
-    progress_bar.progress(1.0, text="All analyses complete!")
+    completion_text = "All analyses complete!"
+    if cached_count > 0:
+        completion_text += f" ({cached_count} loaded from cache)"
+    progress_bar.progress(1.0, text=completion_text)
     st.session_state.results = results
 
     return results
@@ -421,8 +471,37 @@ def render_report_download():
         )
 
     with col2:
-        st.button("📥 Download PDF Report", use_container_width=True, disabled=True,
-                 help="PDF export coming soon")
+        # Generate PDF report
+        vcf_name = os.path.basename(st.session_state.vcf_path) if st.session_state.vcf_path else "Unknown"
+
+        # Convert VCFMetrics to dict for PDF generation
+        vcf_metrics_dict = None
+        if st.session_state.vcf_metrics:
+            m = st.session_state.vcf_metrics
+            vcf_metrics_dict = {
+                'total_variants': m.total_variants,
+                'snps': m.snps,
+                'indels': m.indels,
+                'heterozygous': m.heterozygous,
+                'homozygous_alt': m.homozygous_alt,
+                'titv_ratio': m.titv_ratio,
+                'file_size_mb': m.file_size_mb,
+            }
+
+        pdf_bytes = generate_pdf_report(
+            vcf_filename=vcf_name,
+            results=st.session_state.results,
+            analyses_metadata=AnalysisRunner.ANALYSES,
+            vcf_metrics=vcf_metrics_dict
+        )
+
+        st.download_button(
+            "📥 Download PDF Report",
+            pdf_bytes,
+            file_name=f"helixight_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
 
 
 def generate_text_report() -> str:

@@ -8,10 +8,13 @@ import os
 import re
 import json
 import threading
+import hashlib
+import gzip
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Dict, List, Any, Tuple
 from enum import Enum
+from datetime import datetime
 
 
 class AnalysisStatus(Enum):
@@ -19,6 +22,22 @@ class AnalysisStatus(Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+@dataclass
+class VCFMetrics:
+    """Stores VCF quality metrics"""
+    total_variants: int = 0
+    snps: int = 0
+    indels: int = 0
+    heterozygous: int = 0
+    homozygous_alt: int = 0
+    homozygous_ref: int = 0
+    transitions: int = 0
+    transversions: int = 0
+    titv_ratio: float = 0.0
+    quality_pass: int = 0
+    file_size_mb: float = 0.0
 
 
 @dataclass
@@ -122,11 +141,12 @@ class AnalysisRunner:
         }
     }
 
-    def __init__(self, vcf_path: str):
+    def __init__(self, vcf_path: str, use_cache: bool = True):
         self.vcf_path = vcf_path
         self.results: Dict[str, AnalysisResult] = {}
         self._progress_callback: Optional[Callable] = None
         self._cancel_flag = threading.Event()
+        self.use_cache = use_cache
 
     def set_progress_callback(self, callback: Callable[[str, float, str], None]):
         """Set callback for progress updates: (analysis_name, progress, message)"""
@@ -136,7 +156,7 @@ class AnalysisRunner:
         """Cancel running analyses"""
         self._cancel_flag.set()
 
-    def run_analysis(self, analysis_id: str) -> AnalysisResult:
+    def run_analysis(self, analysis_id: str, force_rerun: bool = False) -> AnalysisResult:
         """Run a single analysis script"""
         if analysis_id not in self.ANALYSES:
             return AnalysisResult(
@@ -146,6 +166,16 @@ class AnalysisRunner:
             )
 
         analysis = self.ANALYSES[analysis_id]
+
+        # Check cache first (unless force_rerun is True)
+        if self.use_cache and not force_rerun:
+            cached_result = _result_cache.get(self.vcf_path, analysis_id)
+            if cached_result is not None:
+                if self._progress_callback:
+                    self._progress_callback(analysis_id, 1.0, f"Loaded from cache: {analysis['name']}")
+                self.results[analysis_id] = cached_result
+                return cached_result
+
         script_path = os.path.join(self.SCRIPTS_DIR, analysis["script"])
 
         if not os.path.exists(script_path):
@@ -199,6 +229,9 @@ class AnalysisRunner:
                 result.status = AnalysisStatus.COMPLETED
                 # Parse output for scores and findings
                 self._parse_output(result, stdout)
+                # Cache successful results
+                if self.use_cache:
+                    _result_cache.set(self.vcf_path, analysis_id, result)
             else:
                 result.status = AnalysisStatus.FAILED
 
@@ -333,3 +366,254 @@ def get_system_info() -> Dict[str, str]:
         info['samtools'] = 'Not found'
 
     return info
+
+
+def get_vcf_metrics(file_path: str) -> VCFMetrics:
+    """
+    Calculate quality metrics for a VCF file using bcftools stats
+
+    Args:
+        file_path: Path to VCF file
+
+    Returns:
+        VCFMetrics dataclass with quality statistics
+    """
+    metrics = VCFMetrics()
+
+    if not os.path.exists(file_path):
+        return metrics
+
+    # Get file size
+    metrics.file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+
+    try:
+        # Run bcftools stats
+        result = subprocess.run(
+            ['bcftools', 'stats', file_path],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        if result.returncode != 0:
+            return metrics
+
+        # Parse stats output
+        for line in result.stdout.split('\n'):
+            if line.startswith('SN\t'):
+                parts = line.split('\t')
+                if len(parts) >= 4:
+                    key = parts[2].rstrip(':')
+                    try:
+                        value = int(parts[3])
+                    except ValueError:
+                        continue
+
+                    if 'number of records' in key:
+                        metrics.total_variants = value
+                    elif 'number of SNPs' in key:
+                        metrics.snps = value
+                    elif 'number of indels' in key:
+                        metrics.indels = value
+
+            # Parse transitions/transversions
+            elif line.startswith('TSTV\t'):
+                parts = line.split('\t')
+                if len(parts) >= 5:
+                    try:
+                        metrics.transitions = int(parts[2])
+                        metrics.transversions = int(parts[3])
+                        metrics.titv_ratio = float(parts[4])
+                    except (ValueError, IndexError):
+                        pass
+
+        # Count genotypes using bcftools query
+        gt_result = subprocess.run(
+            ['bcftools', 'query', '-f', '%GT\n', file_path],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        if gt_result.returncode == 0:
+            for gt in gt_result.stdout.strip().split('\n'):
+                if gt in ('0/1', '1/0', '0|1', '1|0'):
+                    metrics.heterozygous += 1
+                elif gt in ('1/1', '1|1'):
+                    metrics.homozygous_alt += 1
+                elif gt in ('0/0', '0|0'):
+                    metrics.homozygous_ref += 1
+
+        # Count PASS variants
+        pass_result = subprocess.run(
+            ['bcftools', 'view', '-f', 'PASS', '-H', file_path],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        if pass_result.returncode == 0:
+            metrics.quality_pass = len(pass_result.stdout.strip().split('\n')) if pass_result.stdout.strip() else 0
+
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+        pass
+
+    return metrics
+
+
+def get_file_hash(file_path: str) -> str:
+    """
+    Calculate MD5 hash of a file for caching purposes
+
+    Args:
+        file_path: Path to file
+
+    Returns:
+        MD5 hash string
+    """
+    hash_md5 = hashlib.md5()
+
+    try:
+        # For large files, only hash first and last 1MB + file size
+        file_size = os.path.getsize(file_path)
+        chunk_size = 1024 * 1024  # 1MB
+
+        with open(file_path, 'rb') as f:
+            # Hash first chunk
+            hash_md5.update(f.read(chunk_size))
+
+            # Hash last chunk if file is larger
+            if file_size > chunk_size * 2:
+                f.seek(-chunk_size, 2)
+                hash_md5.update(f.read(chunk_size))
+
+        # Include file size in hash
+        hash_md5.update(str(file_size).encode())
+
+        return hash_md5.hexdigest()
+
+    except (OSError, IOError):
+        return ""
+
+
+class ResultCache:
+    """
+    Simple file-based cache for analysis results
+    """
+
+    def __init__(self, cache_dir: str = None):
+        self.cache_dir = cache_dir or os.path.join(
+            os.environ.get("RESULTS_DIR", "/app/results"),
+            ".cache"
+        )
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+    def _get_cache_path(self, vcf_hash: str, analysis_id: str) -> str:
+        """Get path for cached result"""
+        return os.path.join(self.cache_dir, f"{vcf_hash}_{analysis_id}.json")
+
+    def get(self, vcf_path: str, analysis_id: str) -> Optional[AnalysisResult]:
+        """
+        Retrieve cached result if available
+
+        Args:
+            vcf_path: Path to VCF file
+            analysis_id: Analysis identifier
+
+        Returns:
+            Cached AnalysisResult or None
+        """
+        vcf_hash = get_file_hash(vcf_path)
+        if not vcf_hash:
+            return None
+
+        cache_path = self._get_cache_path(vcf_hash, analysis_id)
+
+        if not os.path.exists(cache_path):
+            return None
+
+        try:
+            with open(cache_path, 'r') as f:
+                data = json.load(f)
+
+            return AnalysisResult(
+                name=data['name'],
+                status=AnalysisStatus(data['status']),
+                output=data.get('output', ''),
+                error=data.get('error', ''),
+                scores=data.get('scores', {}),
+                findings=data.get('findings', []),
+                warnings=data.get('warnings', []),
+                output_files=data.get('output_files', [])
+            )
+
+        except (json.JSONDecodeError, KeyError, OSError):
+            return None
+
+    def set(self, vcf_path: str, analysis_id: str, result: AnalysisResult) -> bool:
+        """
+        Cache an analysis result
+
+        Args:
+            vcf_path: Path to VCF file
+            analysis_id: Analysis identifier
+            result: AnalysisResult to cache
+
+        Returns:
+            True if cached successfully
+        """
+        vcf_hash = get_file_hash(vcf_path)
+        if not vcf_hash:
+            return False
+
+        cache_path = self._get_cache_path(vcf_hash, analysis_id)
+
+        try:
+            data = {
+                'name': result.name,
+                'status': result.status.value,
+                'output': result.output,
+                'error': result.error,
+                'scores': result.scores,
+                'findings': result.findings,
+                'warnings': result.warnings,
+                'output_files': result.output_files,
+                'cached_at': datetime.now().isoformat() if 'datetime' in dir() else None
+            }
+
+            with open(cache_path, 'w') as f:
+                json.dump(data, f)
+
+            return True
+
+        except (OSError, TypeError):
+            return False
+
+    def clear(self, vcf_path: str = None):
+        """
+        Clear cache entries
+
+        Args:
+            vcf_path: If provided, only clear cache for this file
+        """
+        if vcf_path:
+            vcf_hash = get_file_hash(vcf_path)
+            if vcf_hash:
+                for f in os.listdir(self.cache_dir):
+                    if f.startswith(vcf_hash):
+                        try:
+                            os.remove(os.path.join(self.cache_dir, f))
+                        except OSError:
+                            pass
+        else:
+            # Clear all cache
+            for f in os.listdir(self.cache_dir):
+                if f.endswith('.json'):
+                    try:
+                        os.remove(os.path.join(self.cache_dir, f))
+                    except OSError:
+                        pass
+
+
+# Global cache instance
+_result_cache = ResultCache()
