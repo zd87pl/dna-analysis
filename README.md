@@ -1,5 +1,7 @@
 # 🧬 Helixight - Open Source Genetic Analysis Toolkit
 
+**Version 1.0.1**
+
 <p align="center">
   <strong>From BAM to Actionable Insights</strong><br>
   Analyze your whole genome sequencing data locally, privately, and for free.
@@ -116,6 +118,12 @@ Place your VCF files in the `data/` directory, or upload them through the web in
 ```bash
 cp your_variants.vcf.gz ./data/
 ```
+
+**Supported file formats:**
+- `.vcf` - Variant Call Format
+- `.vcf.gz` - Compressed VCF (gzip)
+
+Analysis results are saved to the `results/` directory.
 
 ---
 
@@ -317,6 +325,29 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Additional language support
 - [ ] PDF report generation
 - [ ] Interactive result charts
+
+---
+
+## 📝 Changelog
+
+### v1.0.1
+- **Security**: Fixed command injection vulnerabilities in shell scripts
+- **Security**: Added input validation for all file paths and user inputs
+- **Security**: Implemented lock files to prevent race conditions in ClinVar downloads
+- **Bug Fix**: Fixed file upload validation for `.vcf.gz` files in web interface
+- **Bug Fix**: Fixed download button nesting issue in Streamlit
+- **Bug Fix**: Fixed potential KeyError in results display
+- **Bug Fix**: Fixed unreachable code in analysis cancellation
+- **Bug Fix**: Added missing `RESULTS_DIR` environment variable in Docker
+- **Improvement**: Added proper error handling with `set -euo pipefail` in all scripts
+- **Improvement**: Replaced hardcoded values with configurable constants
+- **Improvement**: Added Python 3.8+ compatibility for type hints
+
+### v1.0.0
+- Initial release with CLI and Docker web interface
+- 22 analysis scripts covering athletic, health, and fun genetics
+- Streamlit-based web frontend
+- Docker containerization with bioinformatics tools
 
 ---
 
