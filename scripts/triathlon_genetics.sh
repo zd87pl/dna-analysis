@@ -22,7 +22,12 @@
 #
 #===============================================================================
 
-VCF="${1:-saryd_variants.vcf.gz}"
+# shellcheck source=lib/vcf_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/vcf_common.sh"
+set -eo pipefail
+
+VCF="${1:-}"
+hx_require_arg "$VCF" "$(basename "$0") <variants.vcf.gz>"
 OUTDIR="triathlon_analysis"
 mkdir -p "$OUTDIR"
 
@@ -37,13 +42,17 @@ echo "║                                                                       
 echo "╚═══════════════════════════════════════════════════════════════════════════════════════╝"
 echo ""
 
+# Współrzędne GRCh38 (scripts/lib/GRCh38_COORDINATES.md); biblioteka normalizuje
+# nazwy kontigów i buduje zindeksowaną kopię roboczą.
+hx_prepare_vcf "$VCF"
+
 #===============================================================================
 # FUNKCJE
 #===============================================================================
 
+# Genotyp pierwszego SNP na pozycji (faza znormalizowana, brak wywołania = pusty)
 check_snp() {
-    local pos="$1"
-    bcftools query -r "$pos" -f '[%GT]\n' "$VCF" 2>/dev/null | head -1
+    hx_gt "$1"
 }
 
 # Wyniki dla każdej kategorii
@@ -121,7 +130,7 @@ fi
 
 # VEGFA - angiogeneza (tworzenie nowych naczyń)
 echo "Analizuję VEGFA (angiogeneza)..."
-GT=$(check_snp "6:43770613")
+GT=$(check_snp "6:43770613")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -142,7 +151,7 @@ fi
 
 # HIF1A - adaptacja do hipoksji
 echo "Analizuję HIF1A (adaptacja do hipoksji)..."
-GT=$(check_snp "14:62207556")
+GT=$(check_snp "14:62207556")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -160,7 +169,7 @@ fi
 
 # EPAS1 (HIF-2α) - adaptacja wysokościowa (wariant Denisowiański!)
 echo "Analizuję EPAS1 (adaptacja wysokościowa)..."
-GT=$(check_snp "2:46441523")
+GT=$(check_snp "2:46441523")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
     echo "  🌟 EPAS1: Wariant adaptacji wysokościowej (Denisowiański!)"
     VO2MAX_SCORE=$((VO2MAX_SCORE + 2))
@@ -169,7 +178,7 @@ fi
 
 # NRF1 - funkcja mitochondriów
 echo "Analizuję NRF1 (funkcja mitochondriów)..."
-GT=$(check_snp "7:129613162")
+GT=$(check_snp "7:129613162")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     if [[ "$GT" != "0/0" ]] && [[ "$GT" != "0|0" ]]; then
         echo "  ✅ NRF1 rs2402970: Wariant korzystny dla wydolności"
@@ -218,33 +227,37 @@ echo ""
 
 # PPARA - główny regulator metabolizmu tłuszczów
 echo "Analizuję PPARA (metabolizm kwasów tłuszczowych)..."
-GT=$(check_snp "22:46150500")
+# rs4253778 G>C: the G allele is the one over-represented in endurance
+# athletes (Ahmetov 2006), C in power athletes - same orientation as
+# athletic_genetics.sh (G/G = better fat oxidation).
+GT=$(hx_gt_allele "22:46150500" G C rs4253778)  # TODO(build): unverified GRCh38 (same literal as athletic_genetics.sh)
+GT=${GT#*$'\t'}
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
-            echo "  🔴 PPARA rs4253778: G/G - Niższa oksydacja tłuszczów"
-            FAT_METABOLISM_SCORE=$((FAT_METABOLISM_SCORE + 1))
-            WEAKNESSES+=("PPARA G/G: Słabsze spalanie tłuszczów - większe uzależnienie od glikogenu")
-            RECOMMENDATIONS+=("Trening nisko-glikogenowy (train low) 1-2x/tydzień buduje fat adaptation")
-            RECOMMENDATIONS+=("Dieta ketogeniczna/LCHF może pomóc kompensować PPARA")
+            echo "  ✅ PPARA rs4253778: G/G - Wysoka oksydacja tłuszczów!"
+            FAT_METABOLISM_SCORE=$((FAT_METABOLISM_SCORE + 3))
+            STRENGTHS+=("PPARA G/G: Świetne spalanie tłuszczów - ogromna przewaga na długich dystansach!")
+            BIKE_SCORE=$((BIKE_SCORE + 2))
+            RUN_SCORE=$((RUN_SCORE + 2))
             ;;
         "0/1"|"0|1"|"1/0"|"1|0")
             echo "  🟡 PPARA rs4253778: G/C - Średnia oksydacja tłuszczów"
             FAT_METABOLISM_SCORE=$((FAT_METABOLISM_SCORE + 2))
             ;;
         "1/1"|"1|1")
-            echo "  ✅ PPARA rs4253778: C/C - Wysoka oksydacja tłuszczów!"
-            FAT_METABOLISM_SCORE=$((FAT_METABOLISM_SCORE + 3))
-            STRENGTHS+=("PPARA C/C: Świetne spalanie tłuszczów - ogromna przewaga na długich dystansach!")
-            BIKE_SCORE=$((BIKE_SCORE + 2))
-            RUN_SCORE=$((RUN_SCORE + 2))
+            echo "  🔴 PPARA rs4253778: C/C - Niższa oksydacja tłuszczów"
+            FAT_METABOLISM_SCORE=$((FAT_METABOLISM_SCORE + 1))
+            WEAKNESSES+=("PPARA C/C: Słabsze spalanie tłuszczów - większe uzależnienie od glikogenu")
+            RECOMMENDATIONS+=("Trening nisko-glikogenowy (train low) 1-2x/tydzień buduje fat adaptation")
+            RECOMMENDATIONS+=("Dieta ketogeniczna/LCHF może pomóc kompensować PPARA")
             ;;
     esac
 fi
 
 # PPARD - utylizacja tłuszczów w mięśniach
 echo "Analizuję PPARD (utylizacja tłuszczów)..."
-GT=$(check_snp "6:35381192")
+GT=$(check_snp "6:35381192")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     if [[ "$GT" != "0/0" ]] && [[ "$GT" != "0|0" ]]; then
         echo "  ✅ PPARD rs2016520: Wariant korzystny - lepsza utylizacja tłuszczów"
@@ -258,7 +271,7 @@ fi
 
 # FABP2 - wchłanianie kwasów tłuszczowych
 echo "Analizuję FABP2 (transport kwasów tłuszczowych)..."
-GT=$(check_snp "4:119502441")
+GT=$(check_snp "4:119502441")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -275,7 +288,7 @@ fi
 
 # ADIPOQ - adiponektyna (wrażliwość na insulinę, spalanie tłuszczu)
 echo "Analizuję ADIPOQ (adiponektyna)..."
-GT=$(check_snp "3:186570892")
+GT=$(check_snp "3:186570892")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     if [[ "$GT" == "0/0" ]] || [[ "$GT" == "0|0" ]]; then
         echo "  ✅ ADIPOQ rs1501299: G/G - Wyższa adiponektyna"
@@ -306,7 +319,7 @@ echo ""
 
 # MCT1 (SLC16A1) - transporter mleczanu
 echo "Analizuję MCT1/SLC16A1 (transport mleczanu)..."
-GT=$(check_snp "1:113454754")
+GT=$(check_snp "1:113454754")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -329,7 +342,7 @@ fi
 
 # AMPD1 - deaminaza AMP (metabolizm energetyczny)
 echo "Analizuję AMPD1 (metabolizm energetyczny)..."
-GT=$(check_snp "1:115227107")
+GT=$(check_snp "1:115227107")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -349,7 +362,7 @@ fi
 
 # CKM - kinaza kreatynowa
 echo "Analizuję CKM (kinaza kreatynowa)..."
-GT=$(check_snp "19:45812091")
+GT=$(check_snp "19:45812091")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     if [[ "$GT" != "0/0" ]] && [[ "$GT" != "0|0" ]]; then
         echo "  ✅ CKM rs8111989: Wariant korzystny dla wydolności"
@@ -420,11 +433,14 @@ fi
 
 # ACE I/D
 echo "Analizuję ACE (układ renina-angiotensyna)..."
-GT=$(check_snp "17:63488529")
+# rs4646994 Alu I/D (17:63488529): REF zawiera insercję (I), ALT = delecja (D),
+# więc 0/0 = I/I, 1/1 = D/D. Liczy się tylko rekord indelu >= 250 bp.
+ACE_REC=$(hx_gt_indel "17:63488529" 250)
+GT=${ACE_REC##* }
 ACE_STATUS=""
-if [ -n "$GT" ]; then
+if [ -n "$ACE_REC" ]; then
     case $GT in
-        "1/1"|"1|1")
+        "0/0")
             ACE_STATUS="II"
             echo "  ✅ ACE I/D: I/I - Genotyp wytrzymałościowy"
             ENDURANCE_FIBER_SCORE=$((ENDURANCE_FIBER_SCORE + 3))
@@ -437,18 +453,20 @@ if [ -n "$GT" ]; then
             echo "  🟡 ACE I/D: I/D - Zbalansowany"
             ENDURANCE_FIBER_SCORE=$((ENDURANCE_FIBER_SCORE + 2))
             ;;
-        "0/0"|"0|0")
+        "1/1")
             ACE_STATUS="DD"
             echo "  🔴 ACE I/D: D/D - Genotyp siłowy"
             ENDURANCE_FIBER_SCORE=$((ENDURANCE_FIBER_SCORE + 1))
             WEAKNESSES+=("ACE D/D: Lepszy dla siły/sprintu niż ultra-wytrzymałości")
             ;;
     esac
+else
+    echo "  ACE I/D: nie genotypowano (brak rekordu indelu Alu w VCF)"
 fi
 
 # ACVR1B - hipertrofia mięśni
 echo "Analizuję ACVR1B (odpowiedź mięśni na trening)..."
-GT=$(check_snp "12:52372642")
+GT=$(check_snp "12:52372642")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     if [[ "$GT" != "0/0" ]] && [[ "$GT" != "0|0" ]]; then
         echo "  ✅ ACVR1B rs2854464: Lepsza odpowiedź na trening wytrzymałościowy"
@@ -478,31 +496,15 @@ echo ""
 echo "Triathlon = ogromne obciążenie ścięgien i stawów. Kontuzja = koniec sezonu."
 echo ""
 
-# COL5A1 - kolagen typ V (ścięgna, więzadła)
+# COL5A1 - kolagen typ V (ścięgna, więzadła): rs12722 nie jest sprawdzany.
+# Dawna pozycja 9:137684151 lezy ~2,8 Mb poza COL5A1 w GRCh38 (9:134,64-134,84
+# Mb; to wspolrzedna z zakresu GRCh37), a zweryfikowanej pozycji GRCh38 nie ma.
 echo "Analizuję COL5A1 (elastyczność ścięgien)..."
-GT=$(check_snp "9:137684151")
-if [ -n "$GT" ]; then
-    case $GT in
-        "0/0"|"0|0")
-            echo "  ✅ COL5A1 rs12722: C/C - Sztywniejsze, ale mocniejsze ścięgna"
-            INJURY_RESISTANCE_SCORE=$((INJURY_RESISTANCE_SCORE + 2))
-            RUN_SCORE=$((RUN_SCORE + 1))
-            ;;
-        "0/1"|"0|1"|"1/0"|"1|0")
-            echo "  🟡 COL5A1 rs12722: C/T - Pośredni"
-            INJURY_RESISTANCE_SCORE=$((INJURY_RESISTANCE_SCORE + 1))
-            ;;
-        "1/1"|"1|1")
-            echo "  🔴 COL5A1 rs12722: T/T - Elastyczne ścięgna, wyższe ryzyko kontuzji"
-            WEAKNESSES+=("COL5A1 T/T: Wyższe ryzyko urazu ścięgna Achillesa!")
-            RECOMMENDATIONS+=("PREWENCJA: Ćwiczenia ekscentryczne na Achilles, wolniejsza progresja biegu")
-            ;;
-    esac
-fi
+echo "  COL5A1 rs12722: pozycja niezweryfikowana - pominięto"
 
 # COL1A1 - kolagen typ I
 echo "Analizuję COL1A1 (jakość kolagenu)..."
-GT=$(check_snp "17:50201632")
+GT=$(check_snp "17:50201632")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -519,7 +521,7 @@ fi
 
 # MMP3 - degradacja macierzy
 echo "Analizuję MMP3 (degradacja macierzy)..."
-GT=$(check_snp "11:102733807")
+GT=$(check_snp "11:102733807")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     if [[ "$GT" == "1/1" ]] || [[ "$GT" == "1|1" ]]; then
         echo "  🔴 MMP3 5A/5A: Wyższe ryzyko tendinopatii Achillesa"
@@ -532,14 +534,20 @@ fi
 
 # GDF5 - rozwój chrząstki
 echo "Analizuję GDF5 (zdrowie chrząstki)..."
-GT=$(check_snp "20:35437977")
-if [ -n "$GT" ]; then
-    case $GT in
-        "0/0"|"0|0")
+# rs143383 A>G wg tabeli: A = allel ryzyka OA (+104T na cDNA nici minus),
+# G = ochronny; dawka G z hx_gt_allele, liczba alleli A = 2 - dawka G.
+# TODO(build): unverified GRCh38 allele orientation (dbSNP rs143383)
+RES=$(hx_gt_allele 20:35437977 A G rs143383)
+G_DOSE=${RES%%$'\t'*}
+A_DOSE=""
+[ -n "$G_DOSE" ] && A_DOSE=$((2 - G_DOSE))
+if [ -n "$A_DOSE" ]; then
+    case $A_DOSE in
+        0)
             echo "  ✅ GDF5 rs143383: G/G - Lepsza chrząstka"
             INJURY_RESISTANCE_SCORE=$((INJURY_RESISTANCE_SCORE + 2))
             ;;
-        "0/1"|"0|1"|"1/0"|"1|0"|"1/1"|"1|1")
+        1|2)
             echo "  🔴 GDF5 rs143383: A carrier - Wyższe ryzyko osteoartrozy"
             WEAKNESSES+=("GDF5: Wyższe ryzyko problemów z chrząstką - dbaj o stawy!")
             RECOMMENDATIONS+=("STAWY: Glucosamine 1500mg + Chondroitin 1200mg + UC-II 40mg/dzień")
@@ -592,7 +600,7 @@ fi
 
 # TNF - czynnik martwicy nowotworów
 echo "Analizuję TNF (czynnik zapalny)..."
-GT=$(check_snp "6:31575254")
+GT=$(check_snp "6:31575254")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -609,21 +617,31 @@ fi
 
 # CRP - białko C-reaktywne
 echo "Analizuję CRP (marker zapalenia)..."
-GT=$(check_snp "1:159712267")
+# rs1205 (1:159712443 GRCh38, C>T): allel T (mniejszościowy) obniża bazowy
+# poziom CRP, C/C = najwyższy (3'UTR, 3872G>A w orientacji genu na nici minus).
+RES=$(hx_gt_allele 1:159712443 C T rs1205)
+GT=${RES#*$'\t'}
 if [ -n "$GT" ]; then
-    if [[ "$GT" == "1/1" ]] || [[ "$GT" == "1|1" ]]; then
-        echo "  🔴 CRP rs1205: T/T - Wyższy bazowy poziom CRP"
-        RECOVERY_SCORE=$((RECOVERY_SCORE + 1))
-        RECOMMENDATIONS+=("CRP: Regularne badania CRP do monitorowania przeciążenia")
-    else
-        echo "  ✅ CRP rs1205: C carrier - Niższy bazowy poziom"
-        RECOVERY_SCORE=$((RECOVERY_SCORE + 2))
-    fi
+    case $GT in
+        "1/1")
+            echo "  ✅ CRP rs1205: T/T - Niższy bazowy poziom CRP"
+            RECOVERY_SCORE=$((RECOVERY_SCORE + 2))
+            ;;
+        "0/1")
+            echo "  ✅ CRP rs1205: C/T - Pośredni/niższy bazowy poziom CRP"
+            RECOVERY_SCORE=$((RECOVERY_SCORE + 1))
+            ;;
+        "0/0")
+            echo "  🔴 CRP rs1205: C/C - Wyższy bazowy poziom CRP"
+            RECOVERY_SCORE=$((RECOVERY_SCORE + 1))
+            RECOMMENDATIONS+=("CRP: Regularne badania CRP do monitorowania przeciążenia")
+            ;;
+    esac
 fi
 
 # SOD2 - stres oksydacyjny
 echo "Analizuję SOD2 (ochrona antyoksydacyjna)..."
-GT=$(check_snp "6:160113872")
+GT=$(check_snp "6:159692840")
 if [ -n "$GT" ]; then
     case $GT in
         "0/1"|"0|1"|"1/0"|"1|0")
@@ -664,7 +682,7 @@ echo ""
 
 # COMT - kluczowy dla wydajności pod presją
 echo "Analizuję COMT (odporność na stres)..."
-GT=$(check_snp "22:19951271")
+GT=$(check_snp "22:19963748")
 COMT_STATUS=""
 if [ -n "$GT" ]; then
     case $GT in
@@ -694,7 +712,7 @@ fi
 
 # BDNF - plastyczność mózgu
 echo "Analizuję BDNF (plastyczność mózgu)..."
-GT=$(check_snp "11:27679916")
+GT=$(check_snp "11:27658369")
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -711,7 +729,7 @@ fi
 
 # DRD2 - motywacja i nagroda
 echo "Analizuję DRD2 (układ nagrody)..."
-GT=$(check_snp "11:113400106")
+GT=$(check_snp "11:113400106")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -729,7 +747,7 @@ fi
 
 # 5-HTTLPR (SLC6A4) - serotonina i nastrój
 echo "Analizuję SLC6A4 (transporter serotoniny)..."
-GT=$(check_snp "17:30194319")
+GT=$(check_snp "17:30194319")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -765,7 +783,7 @@ echo ""
 
 # UCP2 - termogeneza
 echo "Analizuję UCP2 (termogeneza)..."
-GT=$(check_snp "11:73976705")
+GT=$(check_snp "11:73976705")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     if [[ "$GT" != "0/0" ]] && [[ "$GT" != "0|0" ]]; then
         echo "  ✅ UCP2 rs660339: Wariant - Lepsza regulacja temperatury"
@@ -778,7 +796,7 @@ fi
 
 # UCP3 - termogeneza mięśniowa
 echo "Analizuję UCP3 (termogeneza mięśniowa)..."
-GT=$(check_snp "11:74009381")
+GT=$(check_snp "11:74009381")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     if [[ "$GT" != "0/0" ]] && [[ "$GT" != "0|0" ]]; then
         echo "  ✅ UCP3 rs1800849: Wariant - Lepsza dysypacja ciepła"
@@ -792,7 +810,7 @@ fi
 
 # TRPM8 - wrażliwość na zimno
 echo "Analizuję TRPM8 (wrażliwość na zimno)..."
-GT=$(check_snp "2:234065133")
+GT=$(check_snp "2:234065133")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     if [[ "$GT" != "0/0" ]] && [[ "$GT" != "0|0" ]]; then
         echo "  ❄️  TRPM8 rs11563208: Wyższa wrażliwość na zimno"
@@ -988,6 +1006,7 @@ REPORT="$OUTDIR/TRIATHLON_REPORT_$(date +%Y%m%d).txt"
 echo "================================================================================"
 echo "              RAPORT GENETYCZNEJ ANALIZY TRIATLONOWEJ"
 echo "              Wygenerowano: $(date)"
+echo "              VCF: $VCF"
 echo "================================================================================"
 echo ""
 echo "PROFIL GENETYCZNY:"
@@ -1031,3 +1050,4 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🏊🚴🏃 TRIATHLON GENETIC ANALYSIS COMPLETE"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
+hx_report_coverage
