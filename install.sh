@@ -65,34 +65,35 @@ case $OS in
         if ! sudo apt-get update; then
             warn "apt-get update failed, continuing anyway..."
         fi
-        if ! sudo apt-get install -y bcftools samtools tabix wget gzip curl; then
+        if ! sudo apt-get install -y bcftools samtools tabix wget gzip curl bc; then
             install_success=false
         fi
         ;;
     fedora)
-        if ! sudo dnf install -y bcftools samtools htslib wget gzip curl; then
+        if ! sudo dnf install -y bcftools samtools htslib wget gzip curl bc; then
             install_success=false
         fi
         ;;
     centos|rhel|rocky|almalinux)
         sudo yum install -y epel-release 2>/dev/null || true
-        if ! sudo yum install -y bcftools samtools htslib wget gzip curl; then
+        if ! sudo yum install -y bcftools samtools htslib wget gzip curl bc; then
             install_success=false
         fi
         ;;
     arch|manjaro)
-        if ! sudo pacman -S --noconfirm bcftools samtools htslib wget gzip curl; then
+        if ! sudo pacman -S --noconfirm bcftools samtools htslib wget gzip curl bc; then
             install_success=false
         fi
         ;;
     macos)
+        # Never curl|bash a remote installer on the user's behalf (it asks for
+        # sudo and a download failure was not even detected). macOS ships bc.
         if ! command -v brew &> /dev/null; then
-            echo "Installing Homebrew..."
-            if ! /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
-                error_exit "Failed to install Homebrew"
-            fi
+            error_exit "Homebrew not found. Install it from https://brew.sh and re-run ./install.sh"
         fi
-        if ! brew install bcftools samtools htslib wget; then
+        # coreutils provides md5sum (gmd5sum / gnubin) for clinvar_scan.sh's
+        # ClinVar checksum; the script falls back to md5 without it.
+        if ! brew install bcftools samtools htslib wget coreutils; then
             install_success=false
         fi
         ;;
@@ -102,6 +103,7 @@ case $OS in
         echo "  - samtools"
         echo "  - tabix (htslib)"
         echo "  - wget"
+        echo "  - bc"
         install_success=false
         ;;
 esac
@@ -138,8 +140,12 @@ fi
 
 # Add to PATH (optional)
 echo ""
-read -r -p "Add Helixight to PATH? (y/n) [n]: " add_path
-if [[ "${add_path,,}" =~ ^y ]]; then
+# EOF (non-interactive stdin) falls back to the advertised default instead of
+# aborting under set -e. No ${var,,}: bash 4 only, macOS ships bash 3.2.
+add_path=n
+read -r -p "Add Helixight to PATH? (y/n) [n]: " add_path || add_path=n
+case "$add_path" in
+  [Yy]*)
     INSTALL_DIR="$(pwd)"
 
     # Detect shell config file
@@ -169,13 +175,14 @@ if [[ "${add_path,,}" =~ ^y ]]; then
         warn "Could not detect shell config file. Add manually:"
         echo "  export PATH=\"\$PATH:$INSTALL_DIR\""
     fi
-fi
+    ;;
+esac
 
 # Verify installation
 echo ""
 echo "Verifying installation..."
 missing_deps=()
-for dep in bcftools samtools tabix wget; do
+for dep in bcftools samtools tabix wget bc; do
     if command -v "$dep" &> /dev/null; then
         success "  ✓ $dep found"
     else
