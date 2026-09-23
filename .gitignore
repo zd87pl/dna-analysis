@@ -30,6 +30,7 @@ data/*
 !data/.gitkeep
 !data/sample_genome.vcf
 !data/sample_genome.vcf.gz
+!data/sample_genome.vcf.gz.tbi
 *.bam
 *.bam.bai
 *.cram
