@@ -5,16 +5,16 @@ Streamlit Web Frontend
 
 import streamlit as st
 import os
+import re
 import tempfile
 import shutil
 from pathlib import Path
 from datetime import datetime
 import plotly.graph_objects as go
-import plotly.express as px
 
 from analysis import (
     AnalysisRunner, AnalysisStatus, get_system_info,
-    get_vcf_metrics, VCFMetrics, _result_cache
+    get_vcf_metrics, get_result_cache
 )
 from pdf_report import generate_pdf_report
 
@@ -89,10 +89,76 @@ def init_session_state():
         st.session_state.vcf_metrics = None
     if 'results' not in st.session_state:
         st.session_state.results = {}
-    if 'language' not in st.session_state:
-        st.session_state.language = 'en'
     if 'use_cache' not in st.session_state:
         st.session_state.use_cache = True
+    if 'upload_message' not in st.session_state:
+        st.session_state.upload_message = None  # (level, text) from the last upload
+    if 'processed_upload' not in st.session_state:
+        st.session_state.processed_upload = None
+
+
+def _save_upload(uploaded_file):
+    """
+    Validate and store an uploaded VCF under DATA_DIR.
+
+    Returns (level, message) where level is 'success', 'warning' or 'error';
+    on success/warning the file is registered in session state.
+    """
+    filename = uploaded_file.name
+    safe = os.path.basename(filename)
+    if safe != filename or safe in ('', '.', '..') or not safe.endswith(('.vcf', '.vcf.gz')):
+        return 'error', "❌ File must be a VCF file (.vcf or .vcf.gz) with a plain file name"
+
+    safe = re.sub(r'[^A-Za-z0-9._-]', '_', safe)
+    data_root = os.path.realpath(DATA_DIR)
+    target = os.path.realpath(os.path.join(DATA_DIR, safe))
+    if not target.startswith(data_root + os.sep):
+        return 'error', "❌ Invalid file name"
+
+    tmp_path = None
+    try:
+        # Stream to a temp file next to the target (no full copy in memory)
+        with tempfile.NamedTemporaryFile(dir=DATA_DIR, suffix='.' + safe, delete=False) as tmp:
+            tmp_path = tmp.name
+            uploaded_file.seek(0)
+            shutil.copyfileobj(uploaded_file, tmp)
+
+        is_valid, message = AnalysisRunner.validate_vcf(tmp_path)
+        if not is_valid:
+            return 'error', f"❌ {message}"
+
+        if os.path.exists(target):
+            return 'error', ("❌ A file with this name already exists; "
+                             "rename your file or pick it from the list")
+
+        os.replace(tmp_path, target)
+        tmp_path = None
+
+        st.session_state.vcf_path = target
+        st.session_state.vcf_info = message
+        st.session_state.results = {}
+        with st.spinner("Calculating VCF metrics..."):
+            st.session_state.vcf_metrics = get_vcf_metrics(target)
+
+        if '0 variant records' in message:
+            return 'warning', f"⚠️ {message}"
+        return 'success', f"✅ {message}"
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+def _show_message(level: str, text: str):
+    """Render a (level, text) pair with the matching streamlit widget"""
+    if level == 'success':
+        st.success(text)
+    elif level == 'warning':
+        st.warning(text)
+    else:
+        st.error(text)
 
 
 def render_header():
@@ -114,31 +180,17 @@ def render_sidebar():
         )
 
         if uploaded_file:
-            # Validate filename pattern (must be .vcf or .vcf.gz)
-            filename = uploaded_file.name
-            if not (filename.endswith('.vcf') or filename.endswith('.vcf.gz')):
-                st.error("❌ File must be a VCF file (.vcf or .vcf.gz)")
-            else:
-                # Save uploaded file
-                file_path = os.path.join(DATA_DIR, filename)
-                with open(file_path, 'wb') as f:
-                    f.write(uploaded_file.getbuffer())
-
-                # Validate
-                is_valid, message = AnalysisRunner.validate_vcf(file_path)
-                if is_valid:
-                    st.session_state.vcf_path = file_path
-                    st.session_state.vcf_info = message
-                    # Calculate VCF metrics
-                    with st.spinner("Calculating VCF metrics..."):
-                        st.session_state.vcf_metrics = get_vcf_metrics(file_path)
-                    st.success(f"✅ {message}")
-                else:
-                    st.error(f"❌ {message}")
-                    try:
-                        os.remove(file_path)
-                    except OSError:
-                        pass  # Ignore removal errors
+            # Process each upload once: streamlit re-runs this block on every
+            # widget interaction while the uploader still holds the file.
+            token = (getattr(uploaded_file, 'file_id', None), uploaded_file.name, uploaded_file.size)
+            if st.session_state.get('processed_upload') != token:
+                st.session_state.processed_upload = token
+                try:
+                    st.session_state.upload_message = _save_upload(uploaded_file)
+                except Exception as e:
+                    st.session_state.upload_message = ('error', f"❌ Upload failed: {e}")
+            if st.session_state.upload_message:
+                _show_message(*st.session_state.upload_message)
 
         # Or select existing file
         st.markdown("---")
@@ -161,9 +213,15 @@ def render_sidebar():
                     if is_valid:
                         st.session_state.vcf_path = file_path
                         st.session_state.vcf_info = message
+                        st.session_state.results = {}
                         # Calculate VCF metrics
                         st.session_state.vcf_metrics = get_vcf_metrics(file_path)
-                        st.success(f"✅ Loaded: {selected}")
+                        # The 'Current File' section below shows the file and its
+                        # validation message (as a warning when it has 0 records);
+                        # drop the banner of the previous upload so it is not shown
+                        # above a different file (processed_upload stays, so the
+                        # file still held by the uploader is not re-saved).
+                        st.session_state.upload_message = None
                         st.rerun()
                     else:
                         st.error(f"❌ {message}")
@@ -175,12 +233,18 @@ def render_sidebar():
         st.markdown("### 📊 Current File")
         if st.session_state.vcf_path:
             st.success(f"**{os.path.basename(st.session_state.vcf_path)}**")
-            st.caption(st.session_state.vcf_info)
+            info = st.session_state.vcf_info or ""
+            if '0 variant records' in info:
+                st.warning(info)
+            else:
+                st.caption(info)
 
             # Display VCF metrics if available
             if st.session_state.vcf_metrics:
                 metrics = st.session_state.vcf_metrics
                 with st.expander("📈 VCF Quality Metrics", expanded=False):
+                    if metrics.error:
+                        st.warning(f"bcftools reported: {metrics.error}")
                     col1, col2 = st.columns(2)
                     with col1:
                         st.metric("Total Variants", f"{metrics.total_variants:,}")
@@ -198,12 +262,6 @@ def render_sidebar():
         # Settings
         st.markdown("---")
         st.markdown("### ⚙️ Settings")
-        st.session_state.language = st.selectbox(
-            "Language",
-            ["en", "pl"],
-            format_func=lambda x: "English" if x == "en" else "Polski"
-        )
-
         st.session_state.use_cache = st.checkbox(
             "Use result caching",
             value=st.session_state.use_cache,
@@ -211,13 +269,13 @@ def render_sidebar():
         )
 
         if st.button("Clear Cache", help="Clear all cached analysis results"):
-            _result_cache.clear()
+            get_result_cache().clear()
             st.success("Cache cleared!")
 
         # About
         st.markdown("---")
         st.markdown("### ℹ️ About")
-        st.caption("Version 1.2.0")
+        st.caption("Version 1.3.0")
         st.caption("[GitHub](https://github.com/zd87pl/dna-analysis)")
 
         # System info
@@ -266,16 +324,23 @@ def render_analysis_selection():
     return selected_analyses
 
 
-def render_progress(analysis_id: str, progress: float, message: str):
-    """Update progress display"""
-    if 'progress_bar' in st.session_state:
-        st.session_state.progress_bar.progress(progress, text=message)
+def _loaded_vcf_is_empty() -> bool:
+    """True when the loaded VCF is known to contain no variant records"""
+    metrics = st.session_state.get('vcf_metrics')
+    info = st.session_state.get('vcf_info') or ""
+    if metrics and not metrics.error and metrics.total_variants == 0:
+        return True
+    return '0 variant records' in info
 
 
 def run_analyses(selected: list):
     """Run selected analyses and display results"""
     if not selected:
         st.warning("Please select at least one analysis")
+        return
+
+    if _loaded_vcf_is_empty():
+        st.error("This VCF contains no variant records; there is nothing to analyse")
         return
 
     st.markdown("## 📈 Running Analyses")
@@ -307,7 +372,7 @@ def run_analyses(selected: list):
 
         if result.status == AnalysisStatus.COMPLETED:
             # Check if this was loaded from cache
-            if st.session_state.use_cache and analysis_id in runner.results:
+            if result.from_cache:
                 cached_count += 1
             status_text.success(f"✅ Completed: {analysis_name}")
         else:
@@ -371,9 +436,18 @@ def render_single_result(analysis_id: str, result):
 
     # Status indicator
     if result.status == AnalysisStatus.COMPLETED:
-        st.success(f"✅ Analysis completed successfully")
+        st.success("✅ Analysis completed successfully")
+        if result.markers_queried:
+            st.caption(f"Data coverage: {result.markers_found}/{result.markers_queried} markers present in the VCF")
     else:
-        st.error(f"❌ Analysis failed: {result.error}")
+        rc = result.returncode
+        st.error(f"Analysis failed{f' (exit code {rc})' if rc is not None else ''}: {result.error}")
+        if result.output:
+            with st.expander("📝 Raw Output (partial)"):
+                st.code(result.output, language="text")
+        if result.stderr and result.stderr.strip() and result.stderr.strip() != result.error.strip():
+            with st.expander("Diagnostics (stderr)"):
+                st.code(result.stderr, language="text")
         return
 
     col1, col2 = st.columns([2, 1])
@@ -417,6 +491,8 @@ def render_single_result(analysis_id: str, result):
                     xaxis_title="Score (%)",
                     showlegend=False
                 )
+                # use_container_width is deprecated from streamlit 1.64 (width='stretch'),
+                # but the replacement does not exist on the older versions we support.
                 st.plotly_chart(fig, use_container_width=True)
 
     with col2:
@@ -445,9 +521,17 @@ def render_single_result(analysis_id: str, result):
     with st.expander("📝 Raw Output"):
         st.code(result.output, language="text")
 
-    if result.error:
-        with st.expander("❌ Errors"):
-            st.code(result.error, language="text")
+    if result.stderr and result.stderr.strip():
+        with st.expander("Diagnostics (stderr)"):
+            st.code(result.stderr, language="text")
+
+
+def _results_signature():
+    """Cheap identity of the current results, used to build reports only once"""
+    return (
+        st.session_state.vcf_path,
+        tuple((aid, r.status.value, len(r.output)) for aid, r in st.session_state.results.items()),
+    )
 
 
 def render_report_download():
@@ -457,21 +541,10 @@ def render_report_download():
 
     st.markdown("## 📄 Generate Report")
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Generate report and provide direct download button (not nested)
-        report = generate_text_report()
-        st.download_button(
-            "📥 Download Text Report",
-            report,
-            file_name=f"helixight_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            mime="text/plain",
-            use_container_width=True
-        )
-
-    with col2:
-        # Generate PDF report
+    # Build both reports once per result set; reruns reuse them
+    signature = _results_signature()
+    reports = st.session_state.get('reports')
+    if not reports or reports.get('signature') != signature:
         vcf_name = os.path.basename(st.session_state.vcf_path) if st.session_state.vcf_path else "Unknown"
 
         # Convert VCFMetrics to dict for PDF generation
@@ -488,20 +561,49 @@ def render_report_download():
                 'file_size_mb': m.file_size_mb,
             }
 
-        pdf_bytes = generate_pdf_report(
-            vcf_filename=vcf_name,
-            results=st.session_state.results,
-            analyses_metadata=AnalysisRunner.ANALYSES,
-            vcf_metrics=vcf_metrics_dict
-        )
+        pdf_bytes = None
+        pdf_error = None
+        try:
+            pdf_bytes = generate_pdf_report(
+                vcf_filename=vcf_name,
+                results=st.session_state.results,
+                analyses_metadata=AnalysisRunner.ANALYSES,
+                vcf_metrics=vcf_metrics_dict
+            )
+        except Exception as e:
+            pdf_error = str(e)
 
+        reports = {
+            'signature': signature,
+            'text': generate_text_report(),
+            'pdf': pdf_bytes,
+            'pdf_error': pdf_error,
+            'stamp': datetime.now().strftime('%Y%m%d_%H%M%S'),
+        }
+        st.session_state.reports = reports
+
+    col1, col2 = st.columns(2)
+
+    with col1:
         st.download_button(
-            "📥 Download PDF Report",
-            pdf_bytes,
-            file_name=f"helixight_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-            mime="application/pdf",
+            "📥 Download Text Report",
+            reports['text'],
+            file_name=f"helixight_report_{reports['stamp']}.txt",
+            mime="text/plain",
             use_container_width=True
         )
+
+    with col2:
+        if reports['pdf'] is not None:
+            st.download_button(
+                "📥 Download PDF Report",
+                reports['pdf'],
+                file_name=f"helixight_report_{reports['stamp']}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+        else:
+            st.error(f"PDF generation failed: {reports['pdf_error']}")
 
 
 def generate_text_report() -> str:
@@ -534,7 +636,8 @@ def generate_text_report() -> str:
             for name, data in result.scores.items():
                 if 'percentage' in data:
                     pct = data['percentage']
-                    bar = '█' * (pct // 10) + '░' * (10 - pct // 10)
+                    filled = max(0, min(10, int(pct) // 10))
+                    bar = '█' * filled + '░' * (10 - filled)
                     lines.append(f"    {name}: {bar} {pct}%")
 
         if result.findings:
@@ -589,7 +692,8 @@ def main():
         st.markdown("---")
 
         if st.button("▶️ Run Selected Analyses", type="primary",
-                    disabled=not st.session_state.vcf_path or not selected,
+                    disabled=(not st.session_state.vcf_path or not selected
+                              or _loaded_vcf_is_empty()),
                     use_container_width=True):
             with st.spinner("Running analyses..."):
                 run_analyses(selected)
@@ -652,8 +756,13 @@ def render_help():
         interpreted by healthcare professionals.
 
         **Q: Can I run this offline?**
-        A: Yes! Once the Docker container is downloaded, no internet connection
-        is required for analysis.
+        A: Mostly. Every analysis runs locally without internet, except the
+        ClinVar Pathogenic Scan, which downloads the ClinVar VCF (~70 MB) from
+        NCBI into results/.reference on first run and refreshes it when the
+        cached copy is older than 90 days (HELIXIGHT_CLINVAR_MAX_AGE_DAYS).
+        Run that scan once while online and it will use the cached copy
+        afterwards; if a refresh download fails, the existing cached copy is
+        still used.
         """)
 
 

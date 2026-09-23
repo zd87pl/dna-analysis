@@ -4,9 +4,59 @@ Generates professional PDF reports from analysis results
 """
 
 from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 from datetime import datetime
-from typing import Dict, Any, List
-import os
+from typing import Dict, Any
+import unicodedata
+
+
+# Characters the core (latin-1) fonts cannot render, mapped to ASCII stand-ins.
+_MARKER_MAP = {
+    '✅': '[OK]',
+    '🔴': '[!]',
+    '⚠': '[!]',
+    '❌': '[X]',
+    '•': '-',
+    '→': '->',
+    '≈': '~',
+    '–': '-',
+    '—': '-',
+}
+
+# Letters that NFKD cannot decompose into a base letter + combining mark.
+_LETTER_MAP = {
+    'ł': 'l',
+    'Ł': 'L',
+    'ß': 'ss',
+}
+
+
+def _to_latin1(text: str) -> str:
+    """
+    Reduce arbitrary text to something the core latin-1 PDF fonts can draw.
+
+    Markers (emoji) become ASCII tags, accented letters lose their accents,
+    and anything that still cannot be encoded is dropped.
+    """
+    if not text:
+        return text
+    text = text.replace('️', '')  # variation selector after emoji
+    for src, dst in _MARKER_MAP.items():
+        text = text.replace(src, dst)
+    for src, dst in _LETTER_MAP.items():
+        text = text.replace(src, dst)
+    decomposed = unicodedata.normalize('NFKD', text)
+    kept = []
+    for ch in decomposed:
+        cat = unicodedata.category(ch)
+        if cat == 'Mn':          # combining marks (accents)
+            continue
+        if cat in ('So', 'Sk', 'Cs', 'Co'):  # symbols, surrogates, private use
+            continue
+        if cat == 'Cc' and ch not in '\n\t':   # control characters (e.g. ESC)
+            continue
+        kept.append(ch)
+    return ''.join(kept).encode('latin-1', 'ignore').decode('latin-1')
 
 
 class HelixightReport(FPDF):
@@ -16,14 +66,20 @@ class HelixightReport(FPDF):
         super().__init__()
         self.set_auto_page_break(auto=True, margin=15)
 
+    def normalize_text(self, text):
+        """Sanitise text for the core fonts before fpdf2 encodes it"""
+        if self.current_font and getattr(self.current_font, 'type', 'core') == 'core':
+            text = _to_latin1(text)
+        return super().normalize_text(text)
+
     def header(self):
         """Page header"""
         self.set_font('Helvetica', 'B', 12)
         self.set_text_color(102, 126, 234)  # Brand purple
-        self.cell(0, 10, 'HELIXIGHT', 0, 0, 'L')
+        self.cell(0, 10, 'HELIXIGHT', 0, new_x=XPos.RIGHT, new_y=YPos.TOP, align='L')
         self.set_font('Helvetica', '', 8)
         self.set_text_color(128, 128, 128)
-        self.cell(0, 10, 'Genetic Analysis Report', 0, 1, 'R')
+        self.cell(0, 10, 'Genetic Analysis Report', 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='R')
         self.line(10, 20, 200, 20)
         self.ln(5)
 
@@ -32,7 +88,7 @@ class HelixightReport(FPDF):
         self.set_y(-15)
         self.set_font('Helvetica', 'I', 8)
         self.set_text_color(128, 128, 128)
-        self.cell(0, 10, f'Page {self.page_no()}/{{nb}}', 0, 0, 'C')
+        self.cell(0, 10, f'Page {self.page_no()}/{{nb}}', 0, new_x=XPos.RIGHT, new_y=YPos.TOP, align='C')
 
     def chapter_title(self, title: str, icon: str = ""):
         """Add a chapter/section title"""
@@ -40,7 +96,7 @@ class HelixightReport(FPDF):
         self.set_text_color(51, 51, 51)
         self.set_fill_color(240, 240, 250)
         display_title = f"{icon} {title}" if icon else title
-        self.cell(0, 10, display_title, 0, 1, 'L', fill=True)
+        self.cell(0, 10, display_title, 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L', fill=True)
         self.ln(2)
 
     def add_score_bar(self, name: str, percentage: int, max_width: int = 100):
@@ -48,8 +104,15 @@ class HelixightReport(FPDF):
         self.set_font('Helvetica', '', 10)
         self.set_text_color(51, 51, 51)
 
+        try:
+            percentage = int(percentage)
+        except (TypeError, ValueError):
+            percentage = 0
+        percentage = max(0, min(100, percentage))
+        name = str(name)[:35]
+
         # Name
-        self.cell(60, 8, name, 0, 0)
+        self.cell(60, 8, name, 0, new_x=XPos.RIGHT, new_y=YPos.TOP)
 
         # Bar background
         bar_x = self.get_x()
@@ -73,26 +136,35 @@ class HelixightReport(FPDF):
 
         # Percentage text
         self.set_x(bar_x + max_width + 5)
-        self.cell(20, 8, f"{percentage}%", 0, 1)
+        self.cell(20, 8, f"{percentage}%", 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     def add_finding(self, finding: str, finding_type: str = "info"):
         """Add a finding with appropriate styling"""
         self.set_font('Helvetica', '', 9)
 
-        if finding_type == "positive" or "No pathogenic" in finding.lower():
+        if finding_type == "positive" or "no pathogenic" in finding.lower():
             self.set_text_color(40, 167, 69)  # Green
             prefix = "[OK] "
-        elif finding_type == "warning" or "FOUND" in finding or "Pathogenic" in finding:
+        elif finding_type == "warning" or "FOUND" in finding or '🔴' in finding:
             self.set_text_color(220, 53, 69)  # Red
             prefix = "[!] "
         else:
             self.set_text_color(51, 51, 51)
             prefix = "- "
 
-        # Clean up emoji characters that might cause encoding issues
-        clean_finding = finding.encode('latin-1', 'replace').decode('latin-1')
-        self.multi_cell(0, 5, prefix + clean_finding)
+        # Emoji and non-latin-1 characters are sanitised by normalize_text()
+        clean_finding = finding.strip()
+        self.multi_cell(0, 5, prefix + clean_finding, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         self.set_text_color(51, 51, 51)
+
+
+def _classify_finding(finding: str) -> str:
+    """Classify a raw finding line for PDF styling (evaluated before sanitising)"""
+    if '✅' in finding or 'no pathogenic' in finding.lower():
+        return "positive"
+    if '🔴' in finding or 'FOUND' in finding:
+        return "warning"
+    return "info"
 
 
 def generate_pdf_report(
@@ -121,20 +193,21 @@ def generate_pdf_report(
     pdf.set_font('Helvetica', 'B', 24)
     pdf.set_text_color(102, 126, 234)
     pdf.ln(20)
-    pdf.cell(0, 15, 'HELIXIGHT', 0, 1, 'C')
+    pdf.cell(0, 15, 'HELIXIGHT', 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
 
     pdf.set_font('Helvetica', '', 14)
     pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 10, 'Genetic Analysis Report', 0, 1, 'C')
+    pdf.cell(0, 10, 'Genetic Analysis Report', 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
 
     pdf.ln(20)
 
     # Report metadata
     pdf.set_font('Helvetica', '', 11)
     pdf.set_text_color(51, 51, 51)
-    pdf.cell(0, 8, f"File: {vcf_filename}", 0, 1, 'C')
-    pdf.cell(0, 8, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 0, 1, 'C')
-    pdf.cell(0, 8, f"Analyses Run: {len(results)}", 0, 1, 'C')
+    pdf.cell(0, 8, f"File: {vcf_filename}", 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+    pdf.cell(0, 8, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 0,
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+    pdf.cell(0, 8, f"Analyses Run: {len(results)}", 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
 
     # VCF Quality Metrics section
     if vcf_metrics:
@@ -152,8 +225,8 @@ def generate_pdf_report(
         ]
 
         for label, value in metrics_table:
-            pdf.cell(80, 7, label, 0, 0)
-            pdf.cell(0, 7, str(value), 0, 1)
+            pdf.cell(80, 7, label, 0, new_x=XPos.RIGHT, new_y=YPos.TOP)
+            pdf.cell(0, 7, str(value), 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     # Summary section
     pdf.add_page()
@@ -172,9 +245,9 @@ def generate_pdf_report(
     ]
 
     for label, value in summary_data:
-        pdf.cell(80, 8, label, 0, 0)
+        pdf.cell(80, 8, label, 0, new_x=XPos.RIGHT, new_y=YPos.TOP)
         pdf.set_font('Helvetica', 'B', 11)
-        pdf.cell(0, 8, value, 0, 1)
+        pdf.cell(0, 8, value, 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_font('Helvetica', '', 11)
 
     # Individual analysis results
@@ -191,17 +264,17 @@ def generate_pdf_report(
         pdf.set_font('Helvetica', 'B', 10)
         if result.status.value == "completed":
             pdf.set_text_color(40, 167, 69)
-            pdf.cell(0, 8, "Status: COMPLETED", 0, 1)
+            pdf.cell(0, 8, "Status: COMPLETED", 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         else:
             pdf.set_text_color(220, 53, 69)
-            pdf.cell(0, 8, f"Status: {result.status.value.upper()}", 0, 1)
+            pdf.cell(0, 8, f"Status: {result.status.value.upper()}", 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(51, 51, 51)
 
         # Scores
         if result.scores:
             pdf.ln(5)
             pdf.set_font('Helvetica', 'B', 11)
-            pdf.cell(0, 8, "Scores", 0, 1)
+            pdf.cell(0, 8, "Scores", 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
             for score_name, score_data in result.scores.items():
                 if 'percentage' in score_data:
@@ -211,20 +284,17 @@ def generate_pdf_report(
         if result.findings:
             pdf.ln(5)
             pdf.set_font('Helvetica', 'B', 11)
-            pdf.cell(0, 8, "Key Findings", 0, 1)
+            pdf.cell(0, 8, "Key Findings", 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
             for finding in result.findings[:15]:  # Limit to prevent overflow
-                finding_type = "positive" if "No pathogenic" in finding.lower() else "info"
-                if "FOUND" in finding or "Pathogenic" in finding:
-                    finding_type = "warning"
-                pdf.add_finding(finding, finding_type)
+                pdf.add_finding(finding, _classify_finding(finding))
 
         # Warnings
         if result.warnings:
             pdf.ln(5)
             pdf.set_font('Helvetica', 'B', 11)
             pdf.set_text_color(255, 193, 7)
-            pdf.cell(0, 8, "Warnings", 0, 1)
+            pdf.cell(0, 8, "Warnings", 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             pdf.set_text_color(51, 51, 51)
 
             for warning in result.warnings[:10]:
@@ -259,7 +329,7 @@ Genetic predisposition does not equal destiny. Most traits and diseases are infl
 By reading this report, you acknowledge that this is for educational purposes only and that the authors bear no responsibility for any actions taken based on these results.
 """
 
-    pdf.multi_cell(0, 5, disclaimer_text.strip())
+    pdf.multi_cell(0, 5, disclaimer_text.strip(), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    # Get PDF as bytes
-    return pdf.output()
+    # Get PDF as bytes (fpdf2 returns a bytearray; st.download_button needs bytes)
+    return bytes(pdf.output())
