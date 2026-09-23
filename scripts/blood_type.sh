@@ -9,6 +9,10 @@
 
 set -euo pipefail
 
+# Shared VCF helpers (hx_prepare_vcf, hx_gt_allele, hx_gt_indel, ...)
+# shellcheck source=lib/vcf_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/vcf_common.sh"
+
 # Validate input
 if [[ $# -lt 1 ]]; then
     echo "Usage: $0 <vcf_file>"
@@ -17,17 +21,22 @@ if [[ $# -lt 1 ]]; then
 fi
 
 VCF_FILE="$1"
+hx_require_arg "$VCF_FILE" "$0 <vcf_file>"
 
 if [[ ! -f "$VCF_FILE" ]]; then
-    echo "Error: VCF file not found: $VCF_FILE"
+    echo "Error: VCF file not found: $VCF_FILE" >&2
     exit 1
 fi
 
 # Check for bcftools
 if ! command -v bcftools &> /dev/null; then
-    echo "Error: bcftools is required but not installed"
+    echo "Error: bcftools is required but not installed" >&2
     exit 1
 fi
+
+# Build (or reuse) a bgzip+indexed, bare-contig, GRCh38-checked working copy;
+# a bcftools failure now aborts with its message instead of reading as "no data".
+hx_prepare_vcf "$VCF_FILE"
 
 echo "==============================================================================="
 echo "                       BLOOD TYPE PREDICTION"
@@ -69,65 +78,129 @@ B_ALLELE=0
 O_ALLELE=0
 RH_POSITIVE=0
 RH_UNKNOWN=1
+# 1 when at least one ABO marker record was present in the VCF (any call);
+# 0 when the ABO call rests on absent records only
+ABO_RECORDS=0
+# 1 when at least one ABO marker carried a non-reference allele
+ABO_ALT_EVIDENCE=0
+
+# Every lookup below verifies the record's POS/REF/ALT against the expected
+# marker (hx_gt_allele) so an overlapping indel or a different variant at the
+# same coordinate can no longer be scored as the ABO/RHD allele.
+# Coordinates: GRCh38, see scripts/lib/GRCh38_COORDINATES.md.
+
+# Dosage of the expected ALT allele (0/1/2) from "DOSAGE<TAB>GT"; empty when
+# there is no matching, called record.
+marker_dosage() { # REGION REF ALT RSID
+    local res
+    res=$(hx_gt_allele "$1" "$2" "$3" "$4")
+    printf '%s\n' "${res%%$'\t'*}"
+}
 
 # Check ABO variants
 
-# rs8176719 - 261delG (O allele marker)
-# Reference G, deletion causes O allele
-O_RESULT=$(bcftools query -r "9:133257521-133257521" -f '[%GT]\n' "$VCF_FILE" 2>/dev/null || echo "")
+# rs8176719 - 261delG (O allele marker), a 1-bp indel. The GRCh37/GRCh38
+# reference sequence carries the deletion (the O allele), so a real VCF
+# represents the marker as a 1-bp INSERTION (9:133257521 T>TC, ALT = non-O,
+# 0/0 = O/O, 0/1 = X/O). The older deletion form (9:133257520 TC>T, ALT = O)
+# is accepted too. Matched by POS and a 1-bp REF/ALT length difference.
+# TODO(build): unverified GRCh38 orientation/POS (dbSNP not reachable offline)
+O_KNOWN=0  # 1 once the rs8176719 record has been read
+O_RESULT=$(hx_gt_indel "9:133257520-133257521" 1)
 if [[ -n "$O_RESULT" ]]; then
-    if [[ "$O_RESULT" == "1/1" || "$O_RESULT" == "1|1" ]]; then
-        O_ALLELE=2  # Homozygous O
-    elif [[ "$O_RESULT" == "0/1" || "$O_RESULT" == "1/0" || "$O_RESULT" == "0|1" || "$O_RESULT" == "1|0" ]]; then
-        O_ALLELE=1  # Heterozygous, one O allele
-    fi
-fi
-
-# rs8176746 (796C>A) - B allele marker
-# A allele = C, B allele = A at this position
-B_MARKER1=$(bcftools query -r "9:133256264-133256264" -f '%REF\t%ALT\t[%GT]\n' "$VCF_FILE" 2>/dev/null || echo "")
-if [[ -n "$B_MARKER1" ]]; then
-    GT=$(echo "$B_MARKER1" | cut -f3)
-    if [[ "$GT" == "1/1" || "$GT" == "1|1" ]]; then
-        B_ALLELE=2
-    elif [[ "$GT" == "0/1" || "$GT" == "1/0" || "$GT" == "0|1" || "$GT" == "1|0" ]]; then
-        B_ALLELE=1
-    fi
-fi
-
-# rs8176747 (803G>C) - Another B allele marker
-B_MARKER2=$(bcftools query -r "9:133256257-133256257" -f '%REF\t%ALT\t[%GT]\n' "$VCF_FILE" 2>/dev/null || echo "")
-
-# rs7853989 - A1 vs A2 distinction and A/B
-A_MARKER=$(bcftools query -r "9:133256042-133256042" -f '%REF\t%ALT\t[%GT]\n' "$VCF_FILE" 2>/dev/null || echo "")
-if [[ -n "$A_MARKER" ]]; then
-    GT=$(echo "$A_MARKER" | cut -f3)
-    if [[ "$GT" == "0/0" || "$GT" == "0|0" ]]; then
-        # Reference allele associated with A
-        if [[ $B_ALLELE -eq 0 ]]; then
-            A_ALLELE=$((2 - O_ALLELE))
+    read -r O_POS O_REF O_ALT O_GT <<< "$O_RESULT"
+    if [[ "$O_POS" == "133257520" || "$O_POS" == "133257521" ]]; then
+        # Index (1-based) of the ALT allele that is REF minus one base (O) or
+        # REF plus one base (non-O; then allele 0 is O)
+        O_IDX=0; NONO_IDX=0; i=0
+        IFS=',' read -r -a O_ALTS <<< "$O_ALT"
+        for a in "${O_ALTS[@]}"; do
+            i=$((i + 1))
+            if [[ ${#a} -eq $(( ${#O_REF} - 1 )) && "$O_REF" == "$a"* ]]; then
+                O_IDX=$i
+                break
+            elif [[ ${#a} -eq $(( ${#O_REF} + 1 )) && "$a" == "$O_REF"* ]]; then
+                NONO_IDX=$i
+                break
+            fi
+        done
+        if [[ $O_IDX -gt 0 || $NONO_IDX -gt 0 ]]; then
+            ABO_RECORDS=1
+            O_KNOWN=1
+            IFS='/' read -r -a O_GTA <<< "$O_GT"
+            for a in "${O_GTA[@]}"; do
+                if [[ $O_IDX -gt 0 ]]; then
+                    [[ "$a" == "$O_IDX" ]] && O_ALLELE=$((O_ALLELE + 1))
+                else
+                    [[ "$a" == "0" ]] && O_ALLELE=$((O_ALLELE + 1))
+                fi
+            done
+            # A non-reference call at the marker is direct evidence (deletion
+            # form: an O allele; insertion form: a non-O allele). A hom-ref
+            # insertion-form call (O/O) is reference-only and keeps the
+            # confidence capped at Moderate.
+            [[ "$O_GT" != "0/0" ]] && ABO_ALT_EVIDENCE=1
+        else
+            echo "  ℹ️  rs8176719: record at 9:$O_POS is ${O_REF}>${O_ALT}, neither the 261delG deletion nor its insertion form - skipped"
         fi
     fi
 fi
 
+# rs8176746 (c.796C>A on the minus strand; plus-strand VCF G>T) - B allele
+# marker: non-B (A/O-like) = G (REF), B = T (ALT) at this position
+# TODO(build): unverified GRCh38 position (derived, dbSNP not consulted)
+B_DOSAGE=$(marker_dosage "9:133256264-133256264" G T rs8176746)
+if [[ -n "$B_DOSAGE" ]]; then
+    ABO_RECORDS=1
+    B_ALLELE=$B_DOSAGE
+    [[ $B_ALLELE -gt 0 ]] && ABO_ALT_EVIDENCE=1
+fi
+
+# rs8176747 (803G>C) is a second B marker, but its GRCh38 position/alleles
+# are not in scripts/lib/GRCh38_COORDINATES.md, so it is not evaluated.
+
+# rs7853989 - A1 vs A2 distinction and A/B (REF G associated with A)
+A_DOSAGE=$(marker_dosage "9:133256042-133256042" G C rs7853989)
+if [[ -n "$A_DOSAGE" ]]; then
+    ABO_RECORDS=1
+    if [[ $A_DOSAGE -eq 0 ]]; then
+        # Reference allele associated with A; the A count follows from the O
+        # count only when the rs8176719 record was actually read (its absence
+        # means reference = O, not A).
+        if [[ $B_ALLELE -eq 0 && $O_KNOWN -eq 1 ]]; then
+            A_ALLELE=$((2 - O_ALLELE))
+        fi
+    else
+        ABO_ALT_EVIDENCE=1
+    fi
+fi
+
+# rs7853989 absent from a variants-only VCF = reference (A-associated); the
+# insertion-form rs8176719 call already fixes the number of non-O alleles.
+A_ASSUMED=0
+if [[ $O_KNOWN -eq 1 && $B_ALLELE -eq 0 && $A_ALLELE -eq 0 && -z "$A_DOSAGE" ]]; then
+    A_ALLELE=$((2 - O_ALLELE))
+    [[ $A_ALLELE -gt 0 ]] && A_ASSUMED=1
+fi
+
 # Check Rh factor
 
-# rs590787 - Proxy for RHD (not perfect but commonly used)
-RH_RESULT=$(bcftools query -r "1:25362249-25362249" -f '[%GT]\n' "$VCF_FILE" 2>/dev/null || echo "")
-if [[ -n "$RH_RESULT" ]]; then
+# rs590787 - Proxy for RHD (not perfect but commonly used); ALT carrier = Rh+
+RH_DOSAGE=$(marker_dosage "1:25362249-25362249" G A rs590787)
+if [[ -n "$RH_DOSAGE" ]]; then
     RH_UNKNOWN=0
-    if [[ "$RH_RESULT" == "0/0" || "$RH_RESULT" == "0|0" ]]; then
+    if [[ $RH_DOSAGE -eq 0 ]]; then
         RH_POSITIVE=0  # Likely Rh-
     else
         RH_POSITIVE=1  # Likely Rh+
     fi
 fi
 
-# Additional RHD check - rs676785
-RH_RESULT2=$(bcftools query -r "1:25409008-25409008" -f '[%GT]\n' "$VCF_FILE" 2>/dev/null || echo "")
-if [[ -n "$RH_RESULT2" && $RH_UNKNOWN -eq 1 ]]; then
+# Additional RHD check - rs676785 (homozygous ALT = Rh+)
+RH_DOSAGE2=$(marker_dosage "1:25409008-25409008" C T rs676785)
+if [[ -n "$RH_DOSAGE2" && $RH_UNKNOWN -eq 1 ]]; then
     RH_UNKNOWN=0
-    if [[ "$RH_RESULT2" == "1/1" || "$RH_RESULT2" == "1|1" ]]; then
+    if [[ $RH_DOSAGE2 -eq 2 ]]; then
         RH_POSITIVE=1
     fi
 fi
@@ -165,10 +238,11 @@ elif [[ $A_ALLELE -ge 1 && $B_ALLELE -ge 1 ]]; then
     ABO_TYPE="AB"
     ABO_GENOTYPE="AB"
 elif [[ $O_ALLELE -eq 0 && $A_ALLELE -eq 0 && $B_ALLELE -eq 0 ]]; then
-    # No O markers, check if we have A by default (reference)
-    # Most common type is A or O
-    ABO_TYPE="A (probable)"
-    ABO_GENOTYPE="Likely A"
+    # No O/A/B allele observed and no rs8176719 record. Absence of that record
+    # cannot be read as "non-O": the reference carries the O (261delG) allele
+    # and a variants-only VCF omits hom-ref sites, so A and O are both open.
+    ABO_TYPE="A or O"
+    ABO_GENOTYPE="A or O (rs8176719 not in VCF)"
 fi
 
 # Determine Rh factor
@@ -181,7 +255,7 @@ else
 fi
 
 # Combine for full blood type
-if [[ "$ABO_TYPE" != "Unknown" && "$RH_TYPE" != "Unknown" ]]; then
+if [[ "$ABO_TYPE" != "Unknown" && "$ABO_TYPE" != "A or O" && "$RH_TYPE" != "Unknown" ]]; then
     if [[ $RH_POSITIVE -eq 1 ]]; then
         FULL_TYPE="${ABO_TYPE}+"
     else
@@ -200,6 +274,8 @@ echo "  │                                                                     
 printf "  │              PREDICTED BLOOD TYPE:  %-10s                    │\n" "$FULL_TYPE"
 echo "  │                                                                     │"
 echo "  └─────────────────────────────────────────────────────────────────────┘"
+echo ""
+echo "  ✅ Predicted blood type: $FULL_TYPE (ABO genotype $ABO_GENOTYPE, Rh $RH_TYPE)"
 echo ""
 echo "  Detailed Analysis:"
 echo "  ───────────────────"
@@ -221,8 +297,15 @@ case "$ABO_TYPE" in
         echo "  • Most common blood type globally (~45%)"
         echo "  • Red cells can be given to anyone (O-)"
         echo "  • Can only receive O blood"
-        echo "  • Lower risk of heart disease"
-        echo "  • Higher risk of ulcers (H. pylori)"
+        ;;
+    "AB")
+        # Must precede "A"*, which would otherwise shadow this arm
+        echo "  🩸 TYPE AB - 'Universal Recipient'"
+        echo ""
+        echo "  • Rarest type (~4%)"
+        echo "  • Can receive from all blood types"
+        echo "  • Can only donate to AB"
+        echo "  • Universal plasma donor"
         ;;
     "A"*)
         echo "  🩸 TYPE A"
@@ -230,8 +313,6 @@ case "$ABO_TYPE" in
         echo "  • Second most common (~40%)"
         echo "  • Can donate to A and AB"
         echo "  • Can receive from A and O"
-        echo "  • Slightly higher risk of heart disease"
-        echo "  • Better adapted to vegetarian diet (historical)"
         ;;
     "B"*)
         echo "  🩸 TYPE B"
@@ -240,16 +321,6 @@ case "$ABO_TYPE" in
         echo "  • Can donate to B and AB"
         echo "  • Can receive from B and O"
         echo "  • More common in Asian populations"
-        echo "  • May have stronger immune system"
-        ;;
-    "AB")
-        echo "  🩸 TYPE AB - 'Universal Recipient'"
-        echo ""
-        echo "  • Rarest type (~4%)"
-        echo "  • Can receive from all blood types"
-        echo "  • Can only donate to AB"
-        echo "  • Universal plasma donor"
-        echo "  • Higher risk of cognitive issues with age"
         ;;
     *)
         echo "  🩸 BLOOD TYPE COULD NOT BE DETERMINED"
@@ -305,12 +376,29 @@ echo "   AB+        │    3%     │    4%   │    2%    │   7%"
 echo "   AB-        │    1%     │    0.3% │   0.2%   │   0.1%"
 echo ""
 
-# Calculate confidence
+# Calculate confidence. "High" requires at least one ABO marker with a
+# non-reference call; a call that rests only on homozygous-reference or
+# absent records is capped at "Moderate".
 CONFIDENCE="Low"
-if [[ "$ABO_TYPE" != "Unknown" && "$RH_TYPE" != "Unknown" ]]; then
+CONFIDENCE_NOTE=""
+if [[ "$ABO_TYPE" == "A or O" ]]; then
+    CONFIDENCE_NOTE="rs8176719 (261delG) record absent: A and O cannot be told apart"
+elif [[ "$ABO_TYPE" != "Unknown" && "$RH_TYPE" != "Unknown" ]]; then
     CONFIDENCE="Moderate"
     if [[ $O_ALLELE -eq 2 || ($A_ALLELE -ge 1 && $B_ALLELE -eq 0) || $B_ALLELE -ge 1 ]]; then
         CONFIDENCE="High"
+    fi
+    if [[ $A_ASSUMED -eq 1 && "$CONFIDENCE" == "High" ]]; then
+        CONFIDENCE="Moderate"
+        CONFIDENCE_NOTE="rs7853989 record absent (reference assumed)"
+    fi
+    if [[ $ABO_ALT_EVIDENCE -eq 0 && "$CONFIDENCE" == "High" ]]; then
+        CONFIDENCE="Moderate"
+        if [[ $ABO_RECORDS -eq 1 ]]; then
+            CONFIDENCE_NOTE="ABO call rests on homozygous-reference calls only"
+        else
+            CONFIDENCE_NOTE="ABO call rests on absent marker records only"
+        fi
     fi
 fi
 
@@ -319,6 +407,9 @@ echo "                          PREDICTION CONFIDENCE"
 echo "==============================================================================="
 echo ""
 echo "  Confidence Level: $CONFIDENCE"
+if [[ -n "$CONFIDENCE_NOTE" ]]; then
+    echo "  ($CONFIDENCE_NOTE)"
+fi
 echo ""
 echo "  Factors affecting accuracy:"
 echo "  • Quality of variant calls in VCF"
@@ -341,3 +432,5 @@ echo ""
 echo "==============================================================================="
 echo "  ⚠️  NOT FOR CLINICAL USE - EDUCATIONAL PURPOSES ONLY"
 echo "==============================================================================="
+# Marker coverage (found/queried); the frontend treats 0 found as "no data".
+hx_report_coverage

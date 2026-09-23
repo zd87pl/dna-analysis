@@ -9,6 +9,10 @@
 
 set -euo pipefail
 
+# Shared VCF helpers (hx_prepare_vcf, hx_gt_allele, hx_gt_indel, ...)
+# shellcheck source=lib/vcf_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/vcf_common.sh"
+
 # Validate input
 if [[ $# -lt 1 ]]; then
     echo "Usage: $0 <vcf_file>"
@@ -17,17 +21,22 @@ if [[ $# -lt 1 ]]; then
 fi
 
 VCF_FILE="$1"
+hx_require_arg "$VCF_FILE" "$0 <vcf_file>"
 
 if [[ ! -f "$VCF_FILE" ]]; then
-    echo "Error: VCF file not found: $VCF_FILE"
+    echo "Error: VCF file not found: $VCF_FILE" >&2
     exit 1
 fi
 
 # Check for bcftools
 if ! command -v bcftools &> /dev/null; then
-    echo "Error: bcftools is required but not installed"
+    echo "Error: bcftools is required but not installed" >&2
     exit 1
 fi
+
+# Build (or reuse) a bgzip+indexed, bare-contig, GRCh38-checked working copy;
+# a bcftools failure now aborts with its message instead of reading as "no data".
+hx_prepare_vcf "$VCF_FILE"
 
 echo "==============================================================================="
 echo "                       CARRIER SCREENING ANALYSIS"
@@ -42,6 +51,11 @@ echo "==========================================================================
 
 # Define carrier screening variants
 # Format: rsID|Gene|Chr|Pos|Ref|Alt|Disease|Inheritance|Population|Severity
+# Build: GRCh38, bare contig names, REF/ALT as on the plus strand of a VCF
+# (canonical table: scripts/lib/GRCh38_COORDINATES.md). Rows with Alt "-"
+# are deletions of the Ref bases starting at Pos; they are matched by the
+# deleted length (see indel_dosage) because a VCF anchors them one base
+# upstream. Rows without a canonical entry: TODO(build): unverified GRCh38.
 declare -a CARRIER_VARIANTS=(
     # Cystic Fibrosis (CFTR) - Most common in Europeans
     "rs113993960|CFTR|7|117559590|CTT|-|Cystic Fibrosis|AR|European (1:25)|Severe"
@@ -51,14 +65,21 @@ declare -a CARRIER_VARIANTS=(
 
     # Sickle Cell Disease / Beta-Thalassemia (HBB)
     "rs334|HBB|11|5227002|T|A|Sickle Cell Disease|AR|African (1:12)|Severe"
-    "rs33930165|HBB|11|5226773|C|T|Beta-Thalassemia|AR|Mediterranean,Asian|Severe"
-    "rs33971440|HBB|11|5226862|C|A|Beta-Thalassemia|AR|Southeast Asian|Severe"
+    # HbC c.19G>A is the base next to HbS c.20A>T (rs334, 11:5227002) on the
+    # minus-strand HBB; IVS-I-1 c.92+1G>A is 73 bp further 5'. Both derived
+    # from the rs334 anchor.  TODO(build): unverified GRCh38 (dbSNP not consulted)
+    "rs33930165|HBB|11|5227003|C|T|Hemoglobin C (HbC)|AR|West African|Variable"
+    "rs33971440|HBB|11|5226929|C|T|Beta-Thalassemia (IVS-I-1)|AR|Mediterranean|Severe"
 
     # Alpha-Thalassemia (HBA1/HBA2)
     "rs41474145|HBA2|16|173245|G|A|Alpha-Thalassemia|AR|Southeast Asian,African|Variable"
 
     # Tay-Sachs Disease (HEXA) - Common in Ashkenazi Jews
-    "rs76173977|HEXA|15|72346580|TATC|-|Tay-Sachs Disease|AR|Ashkenazi (1:30)|Severe"
+    # rs76173977 is c.1274_1277dupTATC ("1278insTATC"), a 4-bp INSERTION: REF "-"
+    # marks an insertion row, matched by a 4-bp length gain at POS-1/POS whatever
+    # the anchor/strand representation (HEXA is on the minus strand).
+    # TODO(build): unverified GRCh38 position
+    "rs76173977|HEXA|15|72346580|-|TATC|Tay-Sachs Disease|AR|Ashkenazi (1:30)|Severe"
     "rs121907945|HEXA|15|72340467|G|A|Tay-Sachs Disease|AR|Ashkenazi|Severe"
 
     # Canavan Disease (ASPA) - Ashkenazi Jewish
@@ -68,8 +89,8 @@ declare -a CARRIER_VARIANTS=(
     "rs104942556|ELP1|9|108869675|T|C|Familial Dysautonomia|AR|Ashkenazi (1:30)|Severe"
 
     # Gaucher Disease (GBA) - Ashkenazi Jewish
-    "rs76763715|GBA|1|155204867|T|C|Gaucher Disease|AR|Ashkenazi (1:15)|Variable"
-    "rs421016|GBA|1|155205634|G|A|Gaucher Disease (N370S)|AR|Ashkenazi|Moderate"
+    "rs76763715|GBA|1|155235843|T|C|Gaucher Disease (N370S)|AR|Ashkenazi (1:15)|Variable"
+    "rs421016|GBA|1|155235252|A|G|Gaucher Disease (L444P)|AR|Ashkenazi|Moderate"
 
     # Niemann-Pick Disease (SMPD1)
     "rs120074117|SMPD1|11|6392706|G|A|Niemann-Pick Type A/B|AR|Ashkenazi|Severe"
@@ -82,7 +103,7 @@ declare -a CARRIER_VARIANTS=(
     "rs121909192|SMN1|5|70951946|C|T|Spinal Muscular Atrophy|AR|Pan-ethnic (1:50)|Severe"
 
     # Hereditary Hemochromatosis (HFE)
-    "rs1800562|HFE|6|26091179|G|A|Hemochromatosis (C282Y)|AR|Northern European|Treatable"
+    "rs1800562|HFE|6|26092913|G|A|Hemochromatosis (C282Y)|AR|Northern European|Treatable"
     "rs1799945|HFE|6|26090951|C|G|Hemochromatosis (H63D)|AR|European|Mild"
 
     # Wilson Disease (ATP7B)
@@ -92,7 +113,10 @@ declare -a CARRIER_VARIANTS=(
     "rs104886456|FANCC|9|97862203|G|T|Fanconi Anemia|AR|Ashkenazi|Severe"
 
     # Bloom Syndrome (BLM) - Ashkenazi Jewish
-    "rs113993962|BLM|15|90631934|ATCTGA|-|Bloom Syndrome|AR|Ashkenazi (1:100)|Severe"
+    # blmAsh is a delins (c.2207_2212delATCTGAinsTAGATTC), matched by exact
+    # REF/ALT; a caller that pads it with an anchor base (POS-1, GATCTGA>GTAGATTC)
+    # is not matched.  TODO(build): unverified GRCh38 position
+    "rs113993962|BLM|15|90631934|ATCTGA|TAGATTC|Bloom Syndrome|AR|Ashkenazi (1:100)|Severe"
 
     # Maple Syrup Urine Disease
     "rs121964998|BCKDHA|19|41557099|G|A|Maple Syrup Urine Disease|AR|Mennonite|Severe"
@@ -130,26 +154,79 @@ HOMOZYGOUS_FOUND=0
 declare -a CARRIER_RESULTS=()
 declare -a HOMOZYGOUS_RESULTS=()
 
-# Check each variant
+# Dosage (0/1/2) of a deletion of SEQ starting at CHR:POS (table rows with
+# Alt "-") or of an insertion of SEQ (rows with Ref "-"). A VCF anchors an
+# indel one base upstream (POS-1, REF = anchor + deleted bases, ALT = anchor),
+# so accept a called record at POS-1 or POS whose REF/ALT length difference
+# equals the indel length. Prints nothing when no such record is called.
+# MODE "del": ALT is REF shortened by len(SEQ); MODE "ins": ALT is REF
+# lengthened by len(SEQ) (representation-independent: only the length change
+# at the anchor is checked, so strand/anchor conventions do not matter).
+indel_dosage() { # CHR POS SEQ MODE
+    local chr=$1 pos=$2 seq=$3 mode=${4:-del} region rec rpos ref alt gt a i idx n want
+    local -a alts gts
+    region="${chr}:$((pos - 1))-${pos}"
+    want=${#seq}
+    [[ "$mode" == ins ]] && want=$(( -want ))
+    # Tally the marker (queried/found) and bail out when no indel of at least
+    # the expected length is called at the anchor.
+    rec=$(hx_gt_indel "$region" "${#seq}")
+    [[ -n "$rec" ]] || return 0
+    # Scan every called record at the anchor for one ALT whose length change
+    # matches exactly (a neighbouring, longer indel may be returned first).
+    while IFS=$'\t' read -r rpos ref alt gt _; do
+        [[ -n "$rpos" ]] || continue
+        [[ "$rpos" -eq $((pos - 1)) || "$rpos" -eq "$pos" ]] || continue
+        [[ "$gt" == *.* ]] && continue
+        IFS=',' read -r -a alts <<< "$alt"
+        idx=0; i=0
+        for a in "${alts[@]}"; do
+            i=$((i + 1))
+            if [[ $(( ${#ref} - ${#a} )) -eq $want ]]; then
+                idx=$i
+                break
+            fi
+        done
+        [[ $idx -gt 0 ]] || continue
+        gt=${gt//|//}
+        IFS='/' read -r -a gts <<< "$gt"
+        n=0
+        for a in "${gts[@]}"; do
+            [[ "$a" == "$idx" ]] && n=$((n + 1))
+        done
+        printf '%s\n' "$n"
+        return 0
+    done < <(hx_query "$region" '%POS\t%REF\t%ALT\t[%GT\t]\n' -e 'GT="mis"')
+    return 0
+}
+
+# Check each variant. Counters use X=$((X+1)): `((X++))` returns 1 when X is 0
+# and aborted the script under set -e before the first lookup.
 for variant_data in "${CARRIER_VARIANTS[@]}"; do
-    IFS='|' read -r RSID GENE CHR POS REF ALT DISEASE INHERITANCE POPULATION SEVERITY <<< "$variant_data"
+    IFS='|' read -r RSID GENE CHR POS REF ALT DISEASE _ POPULATION SEVERITY <<< "$variant_data"
 
-    ((TOTAL_CHECKED++))
+    TOTAL_CHECKED=$((TOTAL_CHECKED + 1))
 
-    # Query the VCF for this position
-    RESULT=$(bcftools query -r "${CHR}:${POS}-${POS}" -f '%CHROM\t%POS\t%REF\t%ALT\t[%GT]\n' "$VCF_FILE" 2>/dev/null || echo "")
+    if [[ "$ALT" == "-" ]]; then
+        DOSAGE=$(indel_dosage "$CHR" "$POS" "$REF" del)
+    elif [[ "$REF" == "-" ]]; then
+        DOSAGE=$(indel_dosage "$CHR" "$POS" "$ALT" ins)
+    else
+        # The record must match POS, REF, ALT (and rsID when the VCF has one);
+        # a different variant at the same coordinate is skipped with a
+        # warning on stderr instead of being reported as this allele.
+        RESULT=$(hx_gt_allele "${CHR}:${POS}-${POS}" "$REF" "$ALT" "$RSID")
+        DOSAGE=${RESULT%%$'\t'*}
+    fi
+    [[ -n "$DOSAGE" ]] || continue
 
-    if [[ -n "$RESULT" ]]; then
-        GT=$(echo "$RESULT" | cut -f5)
-
-        # Check genotype
-        if [[ "$GT" == "0/1" || "$GT" == "1/0" || "$GT" == "0|1" || "$GT" == "1|0" ]]; then
-            ((CARRIERS_FOUND++))
-            CARRIER_RESULTS+=("$RSID|$GENE|$DISEASE|$POPULATION|$SEVERITY")
-        elif [[ "$GT" == "1/1" || "$GT" == "1|1" ]]; then
-            ((HOMOZYGOUS_FOUND++))
-            HOMOZYGOUS_RESULTS+=("$RSID|$GENE|$DISEASE|$POPULATION|$SEVERITY")
-        fi
+    # Check genotype
+    if [[ "$DOSAGE" == "1" ]]; then
+        CARRIERS_FOUND=$((CARRIERS_FOUND + 1))
+        CARRIER_RESULTS+=("$RSID|$GENE|$DISEASE|$POPULATION|$SEVERITY")
+    elif [[ "$DOSAGE" == "2" ]]; then
+        HOMOZYGOUS_FOUND=$((HOMOZYGOUS_FOUND + 1))
+        HOMOZYGOUS_RESULTS+=("$RSID|$GENE|$DISEASE|$POPULATION|$SEVERITY")
     fi
 done
 
@@ -279,3 +356,5 @@ echo ""
 echo "==============================================================================="
 echo "  ⚠️  NOT FOR CLINICAL USE - EDUCATIONAL PURPOSES ONLY"
 echo "==============================================================================="
+# Marker coverage (found/queried); the frontend treats 0 found as "no data".
+hx_report_coverage

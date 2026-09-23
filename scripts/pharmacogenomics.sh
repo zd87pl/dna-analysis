@@ -9,6 +9,10 @@
 
 set -euo pipefail
 
+# Shared VCF helpers (hx_prepare_vcf, hx_gt_allele, hx_report_coverage, ...)
+# shellcheck source=lib/vcf_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/vcf_common.sh"
+
 # Validate input
 if [[ $# -lt 1 ]]; then
     echo "Usage: $0 <vcf_file>"
@@ -17,17 +21,22 @@ if [[ $# -lt 1 ]]; then
 fi
 
 VCF_FILE="$1"
+hx_require_arg "$VCF_FILE" "$0 <vcf_file>"
 
 if [[ ! -f "$VCF_FILE" ]]; then
-    echo "Error: VCF file not found: $VCF_FILE"
+    echo "Error: VCF file not found: $VCF_FILE" >&2
     exit 1
 fi
 
 # Check for bcftools
 if ! command -v bcftools &> /dev/null; then
-    echo "Error: bcftools is required but not installed"
+    echo "Error: bcftools is required but not installed" >&2
     exit 1
 fi
+
+# Build (or reuse) a bgzip+indexed, bare-contig, GRCh38-checked working copy;
+# a bcftools failure now aborts with its message instead of reading as "no data".
+hx_prepare_vcf "$VCF_FILE"
 
 echo "==============================================================================="
 echo "                    PHARMACOGENOMICS (PGx) ANALYSIS"
@@ -42,9 +51,12 @@ echo "==========================================================================
 
 # Define PGx variants with clinical annotations
 # Format: rsID|Gene|Chr|Pos|Ref|Alt|Drug_Class|Effect|Clinical_Note
+# Build: GRCh38, bare contig names, REF/ALT as they appear on the plus strand
+# of a VCF (canonical table: scripts/lib/GRCh38_COORDINATES.md). The Effect
+# column describes carriers of the ALT allele.
 declare -a PGX_VARIANTS=(
     # CYP2D6 - Metabolizes ~25% of all drugs
-    "rs3892097|CYP2D6|22|42126611|G|A|Antidepressants,Opioids,Beta-blockers|Poor Metabolizer|Reduced enzyme activity - may need dose adjustment"
+    "rs3892097|CYP2D6|22|42128945|C|T|Antidepressants,Opioids,Beta-blockers|Poor Metabolizer|*4 allele (splice defect) - reduced enzyme activity, may need dose adjustment"
     "rs1065852|CYP2D6|22|42130692|G|A|Codeine,Tramadol,Tamoxifen|Reduced Function|Intermediate metabolizer phenotype"
     "rs16947|CYP2D6|22|42127941|G|A|Multiple drugs|Normal/Increased|Common variant, normal function"
 
@@ -61,28 +73,32 @@ declare -a PGX_VARIANTS=(
     "rs35599367|CYP3A4|7|99768693|C|T|Statins,Immunosuppressants|Reduced Function|*22 allele - reduced expression"
     "rs776746|CYP3A5|7|99672916|T|C|Tacrolimus,Cyclosporine|Non-expresser|*3 allele - splicing defect"
 
-    # VKORC1 - Warfarin sensitivity
-    "rs9923231|VKORC1|16|31096368|G|A|Warfarin|Increased Sensitivity|Lower warfarin dose needed"
+    # VKORC1 - Warfarin sensitivity (-1639G>A on the minus strand = C>T in a
+    # plus-strand VCF; T = sensitivity allele)  TODO(build): unverified GRCh38
+    "rs9923231|VKORC1|16|31096368|C|T|Warfarin|Increased Sensitivity|Lower warfarin dose needed"
 
-    # SLCO1B1 - Statin transport
-    "rs4149056|SLCO1B1|12|21176804|T|C|Statins|Reduced Transport|Increased myopathy risk with simvastatin"
+    # SLCO1B1 - Statin transport (*5, V174A)
+    "rs4149056|SLCO1B1|12|21178615|T|C|Statins|Reduced Transport|Increased myopathy risk with simvastatin"
 
     # TPMT - Thiopurines (azathioprine, 6-MP)
-    "rs1800462|TPMT|6|18130918|C|G|Azathioprine,6-MP|Reduced Function|*2 allele - toxicity risk"
-    "rs1800460|TPMT|6|18130687|C|T|Azathioprine,6-MP|Reduced Function|*3B allele - toxicity risk"
-    "rs1142345|TPMT|6|18130348|T|C|Azathioprine,6-MP|Reduced Function|*3C allele - toxicity risk"
+    "rs1800462|TPMT|6|18143724|C|G|Azathioprine,6-MP|Reduced Function|*2 allele - toxicity risk"
+    "rs1800460|TPMT|6|18138997|C|T|Azathioprine,6-MP|Reduced Function|*3B allele - toxicity risk"
+    "rs1142345|TPMT|6|18130687|T|C|Azathioprine,6-MP|Reduced Function|*3C allele - toxicity risk"
 
     # DPYD - Fluoropyrimidines (5-FU, capecitabine)
     "rs3918290|DPYD|1|97915614|C|T|5-FU,Capecitabine|Deficient|*2A - severe toxicity risk"
-    "rs55886062|DPYD|1|98039419|A|C|5-FU,Capecitabine|Deficient|*13 - severe toxicity risk"
+    "rs55886062|DPYD|1|98039419|A|C|5-FU,Capecitabine|Deficient|*13 - severe toxicity risk"  # TODO(build): unverified GRCh38
 
-    # UGT1A1 - Irinotecan metabolism
+    # UGT1A1 - Irinotecan metabolism. *28 is a TA-repeat length polymorphism
+    # (TA6 -> TA7) that cannot be matched by REF/ALT; the row is listed but
+    # its genotype is not evaluated.  TODO(build): unverified GRCh38
     "rs8175347|UGT1A1|2|233757013|TA6|TA7|Irinotecan|Reduced Function|*28 allele - neutropenia risk"
 
-    # CYP1A2 - Caffeine, theophylline, some antipsychotics
-    "rs762551|CYP1A2|15|74749576|A|C|Caffeine,Clozapine|Fast Metabolizer|*1F - induced by smoking"
+    # CYP1A2 - Caffeine, theophylline, some antipsychotics.
+    # REF A = *1F (high inducibility, fast); ALT C = slow (non-*1F).
+    "rs762551|CYP1A2|15|74749576|A|C|Caffeine,Clozapine|Slow Metabolizer|C allele (non-*1F) - reduced inducibility; A/A = *1F fast"
 
-    # NAT2 - Isoniazid, hydralazine, sulfonamides
+    # NAT2 - Isoniazid, hydralazine, sulfonamides  TODO(build): unverified GRCh38
     "rs1801280|NAT2|8|18257854|T|C|Isoniazid,Hydralazine|Slow Acetylator|*5 allele"
     "rs1799930|NAT2|8|18258103|G|A|Isoniazid,Sulfonamides|Slow Acetylator|*6 allele"
     "rs1799931|NAT2|8|18258370|G|A|Isoniazid,Caffeine|Slow Acetylator|*7 allele"
@@ -93,14 +109,15 @@ declare -a PGX_VARIANTS=(
     # COMT - Pain sensitivity, some psych meds
     "rs4680|COMT|22|19963748|G|A|Pain medications,ADHD drugs|Altered Metabolism|Val158Met - affects pain perception"
 
-    # HLA-B*57:01 - Abacavir hypersensitivity
+    # HLA-B*57:01 - Abacavir hypersensitivity  TODO(build): unverified GRCh38
     "rs2395029|HCP5|6|31431780|T|G|Abacavir|Hypersensitivity Risk|HLA-B*57:01 tag - screen before prescribing"
 
-    # HLA-B*15:02 - Carbamazepine (SJS/TEN risk in Asians)
+    # HLA-B*15:02 - Carbamazepine (SJS/TEN risk in Asians)  TODO(build): unverified GRCh38
     "rs144012689|HLA-B|6|31356811|C|T|Carbamazepine|SJS/TEN Risk|HLA-B*15:02 tag SNP"
 
-    # Factor V Leiden - Contraceptive risk
-    "rs6025|F5|1|169549811|G|A|Oral Contraceptives|Clotting Risk|Factor V Leiden - VTE risk with estrogen"
+    # Factor V Leiden - Contraceptive risk (c.1691G>A on the minus strand =
+    # C>T in a plus-strand VCF)  TODO(build): unverified GRCh38
+    "rs6025|F5|1|169549811|C|T|Oral Contraceptives|Clotting Risk|Factor V Leiden - VTE risk with estrogen"
 )
 
 echo ""
@@ -114,37 +131,49 @@ ACTIONABLE=0
 
 # Results storage
 declare -a RESULTS=()
+declare -a NOT_EVALUATED=()
 
-# Check each variant
+# Check each variant. Counters use X=$((X+1)): `((X++))` returns 1 when X is 0
+# and aborted the script under set -e before the first lookup.
 for variant_data in "${PGX_VARIANTS[@]}"; do
     IFS='|' read -r RSID GENE CHR POS REF ALT DRUGS EFFECT NOTE <<< "$variant_data"
 
-    ((TOTAL_CHECKED++))
+    TOTAL_CHECKED=$((TOTAL_CHECKED + 1))
 
-    # Query the VCF for this position
-    RESULT=$(bcftools query -r "${CHR}:${POS}-${POS}" -f '%CHROM\t%POS\t%REF\t%ALT\t[%GT]\n' "$VCF_FILE" 2>/dev/null || echo "")
+    # Repeat-length polymorphisms (UGT1A1*28 TA6/TA7) have no nucleotide
+    # REF/ALT to match; report them as not evaluated instead of guessing.
+    if [[ ! "$REF" =~ ^[ACGT]+$ || ! "$ALT" =~ ^[ACGT]+$ ]]; then
+        NOT_EVALUATED+=("$RSID ($GENE): $REF/$ALT repeat polymorphism - genotype not evaluated")
+        continue
+    fi
 
-    if [[ -n "$RESULT" ]]; then
-        GT=$(echo "$RESULT" | cut -f5)
-        VCF_ALT=$(echo "$RESULT" | cut -f4)
+    # Dosage of the expected ALT allele at the expected position. The record
+    # must match POS, REF, ALT (and rsID when the VCF has one); a different
+    # variant at the same coordinate is skipped with a warning on stderr.
+    RESULT=$(hx_gt_allele "${CHR}:${POS}-${POS}" "$REF" "$ALT" "$RSID")
+    [[ -n "$RESULT" ]] || continue
+    DOSAGE=${RESULT%%$'\t'*}
 
-        # Check if variant allele is present
-        if [[ "$GT" == "0/1" || "$GT" == "1/0" || "$GT" == "0|1" || "$GT" == "1|0" ]]; then
-            ((VARIANTS_FOUND++))
-            STATUS="HETEROZYGOUS"
-            RESULTS+=("HET|$RSID|$GENE|$DRUGS|$EFFECT|$NOTE")
+    # Normal-function alleles (e.g. CYP2D6*2 rs16947) are informational only:
+    # not a red/yellow finding, not counted in "Variants Found".
+    if [[ "$EFFECT" == Normal* && ( "$DOSAGE" == "1" || "$DOSAGE" == "2" ) ]]; then
+        NOT_EVALUATED+=("$RSID ($GENE): $NOTE - no dosing impact")
+        continue
+    fi
 
-            if [[ "$EFFECT" == *"Poor"* || "$EFFECT" == *"Deficient"* || "$EFFECT" == *"Risk"* ]]; then
-                ((ACTIONABLE++))
-            fi
-        elif [[ "$GT" == "1/1" || "$GT" == "1|1" ]]; then
-            ((VARIANTS_FOUND++))
-            STATUS="HOMOZYGOUS"
-            RESULTS+=("HOM|$RSID|$GENE|$DRUGS|$EFFECT|$NOTE")
+    if [[ "$DOSAGE" == "1" ]]; then
+        VARIANTS_FOUND=$((VARIANTS_FOUND + 1))
+        RESULTS+=("HET|$RSID|$GENE|$DRUGS|$EFFECT|$NOTE")
 
-            if [[ "$EFFECT" == *"Poor"* || "$EFFECT" == *"Deficient"* || "$EFFECT" == *"Risk"* ]]; then
-                ((ACTIONABLE++))
-            fi
+        if [[ "$EFFECT" == *"Poor"* || "$EFFECT" == *"Deficient"* || "$EFFECT" == *"Risk"* ]]; then
+            ACTIONABLE=$((ACTIONABLE + 1))
+        fi
+    elif [[ "$DOSAGE" == "2" ]]; then
+        VARIANTS_FOUND=$((VARIANTS_FOUND + 1))
+        RESULTS+=("HOM|$RSID|$GENE|$DRUGS|$EFFECT|$NOTE")
+
+        if [[ "$EFFECT" == *"Poor"* || "$EFFECT" == *"Deficient"* || "$EFFECT" == *"Risk"* ]]; then
+            ACTIONABLE=$((ACTIONABLE + 1))
         fi
     fi
 done
@@ -157,6 +186,13 @@ echo "  Variants Checked:    $TOTAL_CHECKED"
 echo "  Variants Found:      $VARIANTS_FOUND"
 echo "  Potentially Actionable: $ACTIONABLE"
 echo ""
+
+if [[ ${#NOT_EVALUATED[@]} -gt 0 ]]; then
+    for note in "${NOT_EVALUATED[@]}"; do
+        echo "  ℹ️  $note"
+    done
+    echo ""
+fi
 
 if [[ ${#RESULTS[@]} -gt 0 ]]; then
     echo "==============================================================================="
@@ -277,3 +313,5 @@ echo ""
 echo "==============================================================================="
 echo "  ⚠️  NOT FOR CLINICAL USE - EDUCATIONAL PURPOSES ONLY"
 echo "==============================================================================="
+# Marker coverage (found/queried); the frontend treats 0 found as "no data".
+hx_report_coverage
