@@ -24,8 +24,15 @@ results/.cache/
 *_analysis/
 *_results/
 helixight_results/
+personalized_protocol/
+evo2_data/
+helixight_output/
 
 # User genomic data — never commit real genomes (sample files are whitelisted)
+*.vcf
+*.vcf.gz
+*.tbi
+*.csi
 data/*
 !data/.gitkeep
 !data/sample_genome.vcf
