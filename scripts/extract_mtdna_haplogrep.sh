@@ -3,15 +3,23 @@
 # EKSTRAKCJA mtDNA dla Haplogrep
 #===============================================================================
 
-VCF="${1:-saryd_variants.vcf.gz}"
-OUTPUT_DIR="${2:-.}"
+# shellcheck source=lib/vcf_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/vcf_common.sh"
+set -eo pipefail
+
+VCF="${1:-}"
+hx_require_arg "$VCF" "$(basename "$0") <variants.vcf.gz> [output_dir]"
+OUTPUT_DIR="${2:-mtdna_analysis}"
 
 echo "╔═══════════════════════════════════════════════════════════════════╗"
 echo "║         EKSTRAKCJA mtDNA DLA HAPLOGREP                            ║"
 echo "╚═══════════════════════════════════════════════════════════════════╝"
 echo ""
 
-mkdir -p "$OUTPUT_DIR"
+# Zindeksowana, posortowana kopia robocza z ujednoliconymi nazwami kontigów
+# (chrM/chrMT/M -> MT); zwykły .vcf / .vcf.gz jest konwertowany, nie odrzucany.
+hx_prepare_vcf "$VCF"
+VCF="$HX_VCF"
 
 #===============================================================================
 # 1. Ekstrakcja VCF tylko dla MT
@@ -19,25 +27,30 @@ mkdir -p "$OUTPUT_DIR"
 
 echo "[1/3] Ekstrakcja wariantów mtDNA do VCF..."
 
-# Próbuj różne nazwy chromosomu MT
-for MT_NAME in "MT" "chrM" "chrMT" "M"; do
-    COUNT=$(bcftools view -r "$MT_NAME" -H "$VCF" 2>/dev/null | wc -l | tr -d ' ')
-    if [ "$COUNT" -gt "0" ]; then
-        echo "  Znaleziono $COUNT wariantów jako '$MT_NAME'"
-        
-        # Eksportuj do VCF
-        bcftools view -r "$MT_NAME" "$VCF" -Oz -o "$OUTPUT_DIR/mtdna_variants.vcf.gz" 2>/dev/null
-        bcftools view -r "$MT_NAME" "$VCF" -o "$OUTPUT_DIR/mtdna_variants.vcf" 2>/dev/null
-        
-        MT_CHROM="$MT_NAME"
-        break
-    fi
-done
+# Kontig MT wykrywany z indeksu (tylko kontigi z rekordami); po normalizacji
+# przez bibliotekę nazwa to "MT". Wyzerowanie chroni przed MT_CHROM z otoczenia.
+MT_CHROM=""
+MT_CHROM=$(bcftools index -s "$VCF" | cut -f1 | grep -Exm1 'MT|chrM|chrMT|M' || true)
 
 if [ -z "$MT_CHROM" ]; then
-    echo "❌ Nie znaleziono wariantów mtDNA!"
-    exit 1
+    echo "⚠️ Brak wariantów mtDNA w pliku (exome/chip?)"
+    echo "⚠️ Brak wariantów mtDNA w pliku (exome/chip?)" >&2
+    # The MT contig is the one queried "marker"; none found here.
+    # shellcheck disable=SC2034  # read by hx_report_coverage (scripts/lib/vcf_common.sh)
+    HX_QUERIED=1
+    HX_FOUND=0
+    hx_report_coverage
+    exit 0
 fi
+
+mkdir -p "$OUTPUT_DIR"
+
+COUNT=$(bcftools view -r "$MT_CHROM" -H "$VCF" | wc -l | tr -d ' ')
+echo "  Znaleziono $COUNT wariantów jako '$MT_CHROM'"
+
+# Eksportuj do VCF
+bcftools view -r "$MT_CHROM" "$VCF" -Oz -o "$OUTPUT_DIR/mtdna_variants.vcf.gz"
+bcftools view -r "$MT_CHROM" "$VCF" -o "$OUTPUT_DIR/mtdna_variants.vcf"
 
 echo "  ✓ Zapisano: $OUTPUT_DIR/mtdna_variants.vcf"
 
@@ -52,7 +65,7 @@ echo "[2/3] Tworzenie pliku HSD..."
 # Polymorphisms to lista wariantów oddzielona tabulatorem
 
 # Zbierz warianty w formacie Haplogrep (pozycja + zmiana)
-VARIANTS=$(bcftools view -r "$MT_CHROM" -H "$VCF" 2>/dev/null | \
+VARIANTS=$(bcftools view -r "$MT_CHROM" -H "$VCF" | \
     awk '{
         pos = $2
         ref = $4
@@ -94,7 +107,7 @@ echo ""
 echo "[3/3] Lista wariantów do wklejenia..."
 
 # Prosta lista wariantów
-bcftools view -r "$MT_CHROM" -H "$VCF" 2>/dev/null | \
+bcftools view -r "$MT_CHROM" -H "$VCF" | \
     awk '{
         pos = $2
         ref = $4
@@ -135,7 +148,15 @@ echo "📋 OPCJA 3: Wklej listę wariantów (najprostsze!)"
 echo "   Na stronie wybierz 'Paste Data' i wklej:"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-cat "$OUTPUT_DIR/mtdna_variants_list.txt" | tr '\n' ' '
+tr '\n' ' ' < "$OUTPUT_DIR/mtdna_variants_list.txt"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
+echo "✅ Znaleziono $COUNT wariantów mtDNA - pliki dla Haplogrep zapisane w $OUTPUT_DIR/"
+echo ""
+# The MT contig is the one queried "marker"; found when it carries records.
+# shellcheck disable=SC2034  # read by hx_report_coverage (scripts/lib/vcf_common.sh)
+HX_QUERIED=1
+# shellcheck disable=SC2034  # read by hx_report_coverage
+HX_FOUND=$([[ ${COUNT:-0} -gt 0 ]] && echo 1 || echo 0)
+hx_report_coverage

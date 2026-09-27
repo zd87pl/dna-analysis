@@ -6,45 +6,54 @@
 
 set -euo pipefail
 
+# Shared VCF helpers (hx_prepare_vcf, hx_gt, hx_gt_indel, hx_query, ...)
+# shellcheck source=lib/vcf_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/vcf_common.sh"
+
 #===============================================================================
 # CONFIGURATION - SNP positions (GRCh38)
+# Canonical coordinates: scripts/lib/GRCh38_COORDINATES.md
 #===============================================================================
 
 SCRIPT_NAME="$(basename "$0")"
 
-# Genomic coordinates for athletic variants
+# Genomic coordinates for athletic variants (GRCh38, bare contig names;
+# the shared library renames chr-prefixed input before any query)
 declare -A SNP_POSITIONS=(
     # Power/Strength
     ["ACTN3"]="11:66560624"
-    ["AGT"]="1:230845794"
+    ["AGT"]="1:230710048"
     ["IL6"]="7:22727026"
-    ["MSTN"]="2:190379711"
+    ["MSTN"]="2:190379711"        # TODO(build): unverified GRCh38
     # Endurance
-    ["ACE"]="17:63488529"
+    ["ACE"]="17:63488529"         # rs4646994 Alu I/D: REF = I, ALT = D
     ["PPARGC1A"]="4:23814039"
-    ["VEGFA"]="6:43770613"
-    ["NFE2L2"]="2:178095031"
-    ["PPARA"]="22:46615880"
+    ["VEGFA"]="6:43770613"        # TODO(build): unverified GRCh38
+    # NFE2L2 rs6721961 is not probed: the former literal 2:178095031 is the
+    # GRCh37 NFE2L2 gene start (GRCh38 gene ~2:177.23-177.27 Mb), and no
+    # verified GRCh38 position/alleles are available offline.
+    ["PPARA"]="22:46150500"       # TODO(build): unverified GRCh38 (rs4253778; same literal as triathlon_genetics.sh, likely the GRCh38 gene start rather than the intronic SNP)
     # Recovery
-    ["CRP"]="1:159682233"
-    ["TNF"]="6:31575254"
-    ["SOD2"]="6:160113872"
-    ["COL1A1"]="17:50201632"
+    ["CRP"]="1:159712443"
+    ["TNF"]="6:31575254"          # TODO(build): unverified GRCh38
+    ["SOD2"]="6:159692840"
+    ["COL1A1"]="17:50201632"      # TODO(build): unverified GRCh38
     # Injury
-    ["COL5A1"]="9:137684151"
-    ["GDF5"]="20:34025756"
-    ["MMP3"]="11:102731092"
+    # COL5A1 rs12722 is not probed: the former literal 9:137684151 lies ~2.8 Mb
+    # outside GRCh38 COL5A1 (9:134.64-134.84 Mb; it is a GRCh37-range
+    # coordinate) and no verified GRCh38 position is available offline.
+    ["GDF5"]="20:35437977"
+    ["MMP3"]="11:102731092"       # TODO(build): unverified GRCh38
     # Psychology
-    ["COMT"]="22:19951271"
-    ["DRD4"]="11:637269"
-    ["BDNF"]="11:27679916"
+    ["COMT"]="22:19963748"
+    ["DRD4"]="11:637269"          # TODO(build): unverified GRCh38
+    ["BDNF"]="11:27658369"
 )
 
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
 NC='\033[0m'
 
 #===============================================================================
@@ -58,19 +67,12 @@ error_exit() {
 
 # Check for required dependencies
 check_dependencies() {
-    local missing=()
-    for cmd in bcftools bc; do
-        if ! command -v "$cmd" &> /dev/null; then
-            missing+=("$cmd")
-        fi
-    done
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        error_exit "Missing required dependencies: ${missing[*]}\nPlease run: ./install.sh"
+    if ! command -v bcftools &> /dev/null; then
+        error_exit "Missing required dependencies: bcftools\nPlease run: ./install.sh"
     fi
 }
 
-# Validate VCF file
+# Validate VCF file (plain, gzip or BGZF; header must parse)
 validate_vcf() {
     local vcf="$1"
 
@@ -78,28 +80,15 @@ validate_vcf() {
         error_exit "VCF file not found: $vcf"
     fi
 
-    # Basic format check
-    if [[ "$vcf" =~ \.gz$ ]]; then
-        if ! zcat "$vcf" 2>/dev/null | head -1 | grep -q "^##fileformat=VCF"; then
-            error_exit "File does not appear to be a valid VCF: $vcf"
-        fi
-    else
-        if ! head -1 "$vcf" 2>/dev/null | grep -q "^##fileformat=VCF"; then
-            error_exit "File does not appear to be a valid VCF: $vcf"
-        fi
+    if ! hx_validate_vcf "$vcf"; then
+        error_exit "File does not appear to be a valid VCF: $vcf"
     fi
 }
 
-# Query SNP genotype
+# Query SNP genotype (first SNP record at POS; phase-normalised; empty when
+# there is no record or the call is missing)
 get_genotype() {
-    local pos="$1"
-    bcftools query -r "$pos" -f '[%GT]\n' "$VCF" 2>/dev/null | head -1
-}
-
-# Query SNP with REF/ALT
-get_snp_info() {
-    local pos="$1"
-    bcftools query -r "$pos" -f '%REF %ALT [%GT]\n' "$VCF" 2>/dev/null | head -1
+    hx_gt "$1"
 }
 
 #===============================================================================
@@ -119,12 +108,17 @@ if [[ $# -lt 1 ]]; then
 fi
 
 VCF="$1"
+hx_require_arg "$VCF" "$SCRIPT_NAME <vcf_file>"
 
 # Check dependencies
 check_dependencies
 
 # Validate input VCF
 validate_vcf "$VCF"
+
+# Build (or reuse) a bgzip+indexed, bare-contig, GRCh38-checked working copy.
+# All queries below go through the shared helpers and $HX_VCF.
+hx_prepare_vcf "$VCF"
 
 echo "╔═══════════════════════════════════════════════════════════════════════════╗"
 echo "║           EXTENDED SPORTS GENETICS PROFILE                                ║"
@@ -143,8 +137,7 @@ echo ""
 POWER_SCORE=0
 
 # ACTN3 - key strength gene
-result=$(get_snp_info "${SNP_POSITIONS[ACTN3]}")
-GT=$(echo "$result" | awk '{print $3}')
+GT=$(get_genotype "${SNP_POSITIONS[ACTN3]}")
 
 if [[ -n "$GT" ]]; then
     case $GT in
@@ -152,12 +145,13 @@ if [[ -n "$GT" ]]; then
             echo "  ACTN3 (rs1815739): R/R → 🏆 ELITE power genetics!"
             echo "    • Full alpha-actinin-3 function in fast-twitch fibers"
             echo "    • Advantage in: sprint, jumps, throws, weightlifting"
-            echo "    • ~18% of population has this genotype"
+            echo "    • ~30-35% of Europeans have this genotype (varies by ancestry)"
             POWER_SCORE=$((POWER_SCORE + 3))
             ;;
         "0/1"|"0|1"|"1/0"|"1|0")
             echo "  ACTN3 (rs1815739): R/X → Good power/endurance mix"
             echo "    • Good for mixed sports (soccer, basketball)"
+            echo "    • ~50% of population has this genotype"
             POWER_SCORE=$((POWER_SCORE + 2))
             ;;
         "1/1"|"1|1")
@@ -215,11 +209,15 @@ echo ""
 
 ENDURANCE_SCORE=0
 
-# ACE - angiotensin-converting enzyme
-result=$(get_genotype "${SNP_POSITIONS[ACE]}")
+# ACE - angiotensin-converting enzyme (rs4646994 287-bp Alu insertion/deletion).
+# The GRCh38 reference carries the insertion, so REF = I and ALT = D:
+# 0/0 = I/I, 0/1 = I/D, 1/1 = D/D. Only a record whose REF/ALT differ by
+# >= 250 bp is accepted, so a SNP or small indel overlapping the anchor base
+# is never scored as the Alu I/D.
+result=$(hx_gt_indel "${SNP_POSITIONS[ACE]}" 250)
 if [[ -n "$result" ]]; then
-    case $result in
-        "1/1"|"1|1")
+    case ${result##* } in
+        "0/0"|"0|0")
             echo "  ACE (I/D): I/I → Better endurance, aerobic capacity"
             echo "    • Advantage in: long runs, cycling, swimming"
             ENDURANCE_SCORE=$((ENDURANCE_SCORE + 2))
@@ -228,10 +226,12 @@ if [[ -n "$result" ]]; then
             echo "  ACE (I/D): I/D → Balanced profile"
             ENDURANCE_SCORE=$((ENDURANCE_SCORE + 1))
             ;;
-        "0/0"|"0|0")
+        "1/1"|"1|1")
             echo "  ACE (I/D): D/D → Better strength and power"
             ;;
     esac
+else
+    echo "  ACE (I/D): not typed (no Alu insertion/deletion record at ${SNP_POSITIONS[ACE]})"
 fi
 
 # PPARGC1A (PGC-1alpha) - mitochondrial biogenesis
@@ -260,15 +260,13 @@ if [[ -n "$result" ]]; then
     esac
 fi
 
-# NRF2 - antioxidant response
-result=$(get_genotype "${SNP_POSITIONS[NFE2L2]}")
-if [[ -n "$result" ]] && [[ "$result" != "0/0" ]] && [[ "$result" != "0|0" ]]; then
-    echo "  NFE2L2: Variant → Better antioxidant protection"
-    ENDURANCE_SCORE=$((ENDURANCE_SCORE + 1))
-fi
+# NRF2 (NFE2L2 rs6721961) - antioxidant response: skipped, see SNP_POSITIONS
+echo "  NFE2L2 (rs6721961): position unverified - skipped"
 
-# PPARA - fat metabolism as fuel
-result=$(get_genotype "${SNP_POSITIONS[PPARA]}")
+# PPARA - fat metabolism as fuel (rs4253778 G>C; G = endurance-associated).
+# Allele-checked so a wrong coordinate degrades to "not reported" + warning.
+result=$(hx_gt_allele "${SNP_POSITIONS[PPARA]}" G C rs4253778)
+result=${result#*$'\t'}
 if [[ -n "$result" ]]; then
     case $result in
         "0/0"|"0|0")
@@ -279,7 +277,7 @@ if [[ -n "$result" ]]; then
 fi
 
 echo ""
-echo "  ENDURANCE SCORE: $ENDURANCE_SCORE / 7"
+echo "  ENDURANCE SCORE: $ENDURANCE_SCORE / 6"
 echo ""
 
 #===============================================================================
@@ -310,9 +308,11 @@ if [[ -n "$result" ]]; then
 fi
 
 # CRP - C-reactive protein
+# rs1205 C>T: the T (minor) allele is associated with lower baseline CRP;
+# C/C is the highest-CRP genotype.
 result=$(get_genotype "${SNP_POSITIONS[CRP]}")
-if [[ -n "$result" ]] && [[ "$result" == "0/0" || "$result" == "0|0" ]]; then
-    echo "  CRP (rs1205): Lower inflammation level"
+if [[ -n "$result" ]] && [[ "$result" == "1/1" || "$result" == "0/1" ]]; then
+    echo "  CRP (rs1205): T carrier → Lower baseline CRP / inflammation"
     RECOVERY_SCORE=$((RECOVERY_SCORE + 1))
 fi
 
@@ -367,29 +367,18 @@ echo ""
 
 INJURY_RISK=0
 
-# COL5A1 - ACL and tendon injuries
-result=$(get_genotype "${SNP_POSITIONS[COL5A1]}")
-if [[ -n "$result" ]]; then
-    case $result in
-        "1/1"|"1|1")
-            echo "  COL5A1 (rs12722): T/T → Elevated ACL injury risk"
-            INJURY_RISK=$((INJURY_RISK + 2))
-            ;;
-        "0/1"|"0|1"|"1/0"|"1|0")
-            echo "  COL5A1 (rs12722): C/T → Moderate injury risk"
-            INJURY_RISK=$((INJURY_RISK + 1))
-            ;;
-        "0/0"|"0|0")
-            echo "  COL5A1 (rs12722): C/C → Lower tendon injury risk"
-            ;;
-    esac
-fi
+# COL5A1 (rs12722) - ACL and tendon injuries: skipped, see SNP_POSITIONS
+echo "  COL5A1 (rs12722): position unverified - skipped"
 
 # GDF5 - cartilage development
-result=$(get_genotype "${SNP_POSITIONS[GDF5]}")
+# rs143383 A>G (table orientation): A = OA risk allele, G = protective, so
+# the homozygous-risk genotype is A/A = 0/0 under A>G; dosage of G is read.
+# TODO(build): unverified GRCh38 allele orientation (dbSNP rs143383)
+result=$(hx_gt_allele "${SNP_POSITIONS[GDF5]}" A G rs143383)
+result=${result%%$'\t'*}
 if [[ -n "$result" ]]; then
     case $result in
-        "1/1"|"1|1")
+        0)
             echo "  GDF5 (rs143383): A/A → Elevated osteoarthritis risk"
             INJURY_RISK=$((INJURY_RISK + 1))
             ;;
@@ -476,10 +465,10 @@ echo "║                    SPORTS PROFILE SUMMARY                             
 echo "╚═══════════════════════════════════════════════════════════════════════════╝"
 echo ""
 
-# Calculate total scores
-POWER_PCT=$(echo "scale=0; $POWER_SCORE * 100 / 6" | bc)
-ENDURANCE_PCT=$(echo "scale=0; $ENDURANCE_SCORE * 100 / 7" | bc)
-RECOVERY_PCT=$(echo "scale=0; $RECOVERY_SCORE * 100 / 7" | bc)
+# Calculate total scores (integer percentages; no bc dependency)
+POWER_PCT=$((POWER_SCORE * 100 / 6))
+ENDURANCE_PCT=$((ENDURANCE_SCORE * 100 / 6))
+RECOVERY_PCT=$((RECOVERY_SCORE * 100 / 7))
 
 echo "SCORES:"
 echo ""
@@ -562,3 +551,5 @@ if [[ $INJURY_RISK -ge 2 ]]; then
 fi
 
 echo ""
+# Marker coverage (found/queried); the frontend treats 0 found as "no data".
+hx_report_coverage

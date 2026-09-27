@@ -1,30 +1,40 @@
-version: '3.8'
-
 services:
   helixight:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: helixight
+    # Run as the invoking user so that files written into ./data and ./results
+    # belong to you. bash does not export UID, so run
+    #   export UID; export GID=$(id -g)
+    # before `docker compose up`, or put UID=... and GID=... in a .env file next
+    # to this file. Otherwise the image's unprivileged user (10001) is used.
+    user: "${UID:-10001}:${GID:-10001}"
     ports:
-      - "8501:8501"
+      # The app has no authentication: publish on localhost only. For access
+      # from other machines set HELIXIGHT_BIND=0.0.0.0 (or an interface address)
+      # and put a reverse proxy with authentication and TLS in front of it.
+      - "${HELIXIGHT_BIND:-127.0.0.1}:8501:8501"
     volumes:
-      # Mount your data directory containing VCF/BAM files
+      # Mount your data directory containing VCF files (data/sample_genome.vcf.gz is included)
       - ./data:/data
-      # Mount results directory for persistent output
+      # Mount results directory for persistent output (.cache/, .work/ and .reference/ live here)
       - ./results:/app/results
+      # Optional: keep the ClinVar download (~70 MB, HELIXIGHT_REFERENCE_DIR) outside results/
+      # - ./reference:/app/results/.reference
     environment:
-      - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=5000
+      # Streamlit holds a whole upload in memory (>= 2x the file size). Larger
+      # files: copy them into ./data and pick them from "Available VCF files".
+      - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=1000
+      # Language of the CLI menu (helixight.sh) only; the web UI is English-only
       - HELIXIGHT_LANGUAGE=en
     restart: unless-stopped
-    # Resource limits (adjust based on your system)
+    # Resource limits (adjust based on your system). deploy.resources is honoured
+    # by `docker compose` (v2); mem_limit is for the legacy docker-compose v1 binary.
+    mem_limit: 8g
     deploy:
       resources:
         limits:
           memory: 8G
         reservations:
           memory: 2G
-
-# Optional: Add volume for reference genomes (large files)
-# Uncomment if you want to persist reference downloads
-#   - ./reference:/app/reference

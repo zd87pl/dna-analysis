@@ -5,9 +5,24 @@
 # Wymaga: ExpansionHunter
 #===============================================================================
 
-BAM="${1:-saryd.bam}"
-REFERENCE="${2:-human_g1k_v37.fasta}"
+set -o pipefail
+
+BAM="${1:-}"
+# Referencja: ta sama, do ktorej wyrownano BAM (Helixight zaklada GRCh38;
+# domyslna nazwa pliku jest historyczna). Wspolrzedne regionow STR ponizej
+# pochodza z oryginalnego skryptu i nie zostaly zweryfikowane dla GRCh38.
+REFERENCE="${2:-human_g1k_v37.fasta}"  # TODO(build): unverified GRCh38
 OUTPUT_DIR="${3:-./str_analysis}"
+
+# Skrypt wymaga wyrownanego BAM/CRAM (nie VCF!): sprawdz przed utworzeniem katalogu
+[[ -f "$BAM" && "$BAM" =~ \.(bam|cram)$ ]] || {
+    echo "str_analysis.sh requires an aligned BAM/CRAM file, got: ${BAM:-<none>}" >&2
+    exit 2
+}
+samtools quickcheck "$BAM" || exit 2
+# Contig naming of the BAM ("chr4" vs "4"): the fallback regions below are
+# bare and get this prefix so `samtools depth -r` parses them on either style.
+HX_CHR=$(samtools view -H "$BAM" | awk '$1=="@SQ" && !d {sub("SN:","",$2); print ($2 ~ /^chr/ ? "chr" : ""); d=1}')
 
 echo "╔═══════════════════════════════════════════════════════════════════╗"
 echo "║         STR EXPANSION ANALYSIS                                    ║"
@@ -48,40 +63,45 @@ if ! command -v ExpansionHunter &> /dev/null; then
     echo "=== HUNTINGTON (HTT) - CAG repeat ==="
     echo "Region: chr4:3076604-3076693"
     echo "Normalny: <36 powtórzeń | Patogenny: >40 powtórzeń"
-    samtools depth -r 4:3076604-3076693 "$BAM" 2>/dev/null | \
-        awk '{sum+=$3; cnt++} END {print "Średnie pokrycie regionu: " (cnt>0 ? sum/cnt : 0) "x"}'
+    samtools depth -r "${HX_CHR}4:3076604-3076693" "$BAM" | \
+        awk '{sum+=$3; cnt++} END {print "Średnie pokrycie regionu: " (cnt>0 ? sum/cnt : 0) "x"}' \
+        || { echo "samtools depth failed for region ${HX_CHR}4:3076604-3076693 in $BAM (see the samtools message above: contig not in the BAM header / genome build mismatch, or missing .bai index)" >&2; exit 2; }
     echo ""
     
     # FMR1 - Fragile X (chrX:146993569-146993628, CGG repeat)
     echo "=== FRAGILE X (FMR1) - CGG repeat ==="
     echo "Region: chrX:146993569-146993628"
     echo "Normalny: <45 | Premutacja: 55-200 | Pełna mutacja: >200"
-    samtools depth -r X:146993569-146993628 "$BAM" 2>/dev/null | \
-        awk '{sum+=$3; cnt++} END {print "Średnie pokrycie regionu: " (cnt>0 ? sum/cnt : 0) "x"}'
+    samtools depth -r "${HX_CHR}X:146993569-146993628" "$BAM" | \
+        awk '{sum+=$3; cnt++} END {print "Średnie pokrycie regionu: " (cnt>0 ? sum/cnt : 0) "x"}' \
+        || { echo "samtools depth failed for region ${HX_CHR}X:146993569-146993628 in $BAM (see the samtools message above: contig not in the BAM header / genome build mismatch, or missing .bai index)" >&2; exit 2; }
     echo ""
     
     # C9orf72 - ALS/FTD (chr9:27573528-27573546, GGGGCC repeat)
     echo "=== ALS/FTD (C9orf72) - GGGGCC repeat ==="
     echo "Region: chr9:27573528-27573546"
     echo "Normalny: <30 | Patogenny: >60 (często setki-tysiące)"
-    samtools depth -r 9:27573528-27573546 "$BAM" 2>/dev/null | \
-        awk '{sum+=$3; cnt++} END {print "Średnie pokrycie regionu: " (cnt>0 ? sum/cnt : 0) "x"}'
+    samtools depth -r "${HX_CHR}9:27573528-27573546" "$BAM" | \
+        awk '{sum+=$3; cnt++} END {print "Średnie pokrycie regionu: " (cnt>0 ? sum/cnt : 0) "x"}' \
+        || { echo "samtools depth failed for region ${HX_CHR}9:27573528-27573546 in $BAM (see the samtools message above: contig not in the BAM header / genome build mismatch, or missing .bai index)" >&2; exit 2; }
     echo ""
     
     # DMPK - Dystrofia miotoniczna typ 1 (chr19:46273463-46273524, CTG repeat)
     echo "=== DYSTROFIA MIOTONICZNA TYP 1 (DMPK) - CTG repeat ==="
     echo "Region: chr19:46273463-46273524"
     echo "Normalny: 5-37 | Patogenny: >50"
-    samtools depth -r 19:46273463-46273524 "$BAM" 2>/dev/null | \
-        awk '{sum+=$3; cnt++} END {print "Średnie pokrycie regionu: " (cnt>0 ? sum/cnt : 0) "x"}'
+    samtools depth -r "${HX_CHR}19:46273463-46273524" "$BAM" | \
+        awk '{sum+=$3; cnt++} END {print "Średnie pokrycie regionu: " (cnt>0 ? sum/cnt : 0) "x"}' \
+        || { echo "samtools depth failed for region ${HX_CHR}19:46273463-46273524 in $BAM (see the samtools message above: contig not in the BAM header / genome build mismatch, or missing .bai index)" >&2; exit 2; }
     echo ""
     
     # FXN - Ataksja Friedreicha (chr9:71652202-71652240, GAA repeat)
     echo "=== ATAKSJA FRIEDREICHA (FXN) - GAA repeat ==="
     echo "Region: chr9:71652202-71652240"
     echo "Normalny: <33 | Patogenny: >66"
-    samtools depth -r 9:71652202-71652240 "$BAM" 2>/dev/null | \
-        awk '{sum+=$3; cnt++} END {print "Średnie pokrycie regionu: " (cnt>0 ? sum/cnt : 0) "x"}'
+    samtools depth -r "${HX_CHR}9:71652202-71652240" "$BAM" | \
+        awk '{sum+=$3; cnt++} END {print "Średnie pokrycie regionu: " (cnt>0 ? sum/cnt : 0) "x"}' \
+        || { echo "samtools depth failed for region ${HX_CHR}9:71652202-71652240 in $BAM (see the samtools message above: contig not in the BAM header / genome build mismatch, or missing .bai index)" >&2; exit 2; }
     echo ""
     
     echo "⚠️  UWAGA: Analiza pokrycia NIE określa liczby powtórzeń!"

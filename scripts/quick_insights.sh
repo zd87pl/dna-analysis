@@ -2,19 +2,50 @@
 #===============================================================================
 # QUICK GENOME INSIGHTS
 # Natychmiastowe interesujące odkrycia z VCF
+#
+# Współrzędne: GRCh38, nazwy kontigów bez prefiksu "chr" (biblioteka
+# scripts/lib/vcf_common.sh normalizuje plik wejściowy przed zapytaniami).
+# Kanoniczna tabela: scripts/lib/GRCh38_COORDINATES.md
 #===============================================================================
 
-VCF="${1:-saryd_variants.vcf.gz}"
+# shellcheck source=lib/vcf_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/vcf_common.sh"
+set -eo pipefail
+
+VCF="${1:-}"
+hx_require_arg "$VCF" "$(basename "$0") <variants.vcf.gz>"
 
 echo "╔═══════════════════════════════════════════════════════════════════╗"
 echo "║              QUICK GENOME INSIGHTS                                ║"
 echo "╚═══════════════════════════════════════════════════════════════════╝"
 echo ""
 
-if [ ! -f "$VCF" ]; then
-    echo "Błąd: Nie znaleziono pliku $VCF"
-    exit 1
-fi
+hx_prepare_vcf "$VCF"
+
+# gt_at REGION REF ALT [RSID]: znormalizowany genotyp rekordu, którego REF/ALT
+# zgadzają się z tabelą kanoniczną (pusty, gdy brak rekordu lub inne allele).
+# Genotyp wyprowadzany z dawki oczekiwanego allelu ALT (0/0, 0/1, 1/1), tak by
+# rekordy wieloalleliczne (np. G>A,C z GT 0/2) nie były mylone z nosicielstwem.
+gt_at() {
+    local out d
+    out=$(hx_gt_allele "$@")
+    [[ -n $out ]] || { printf '\n'; return 0; }
+    d=${out%%$'\t'*}
+    case $d in
+        0) printf '0/0\n' ;;
+        1) printf '0/1\n' ;;
+        2) printf '1/1\n' ;;
+        *) printf '%s\n' "${out#*$'\t'}" ;;
+    esac
+}
+
+# gt_letters GT REF ALT: "0/1" + C/T -> "C/T" (litery z nici plus, jak w VCF)
+gt_letters() {
+    local a=${1%%/*} b=${1#*/}
+    [[ $a == 0 ]] && a=$2 || a=$3
+    [[ $b == 0 ]] && b=$2 || b=$3
+    printf '%s/%s' "$a" "$b"
+}
 
 #===============================================================================
 # PODSTAWOWE STATYSTYKI
@@ -23,13 +54,13 @@ fi
 echo "📊 PODSTAWOWE STATYSTYKI"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-TOTAL=$(bcftools view -H "$VCF" 2>/dev/null | wc -l | tr -d ' ')
-SNPS=$(bcftools view -v snps -H "$VCF" 2>/dev/null | wc -l | tr -d ' ')
-INDELS=$(bcftools view -v indels -H "$VCF" 2>/dev/null | wc -l | tr -d ' ')
+TOTAL=$(bcftools view -H "$HX_VCF" | wc -l | tr -d ' ')
+SNPS=$(bcftools view -v snps -H "$HX_VCF" | wc -l | tr -d ' ')
+INDELS=$(bcftools view -v indels -H "$HX_VCF" | wc -l | tr -d ' ')
 
-printf "Wszystkie warianty: %'d\n" $TOTAL
-printf "SNPs:               %'d\n" $SNPS
-printf "Indele:             %'d\n" $INDELS
+printf "Wszystkie warianty: %'d\n" "$TOTAL"
+printf "SNPs:               %'d\n" "$SNPS"
+printf "Indele:             %'d\n" "$INDELS"
 echo ""
 
 #===============================================================================
@@ -39,13 +70,17 @@ echo ""
 echo "👤 PŁEĆ GENETYCZNA"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-X_COUNT=$(bcftools view -r X -H "$VCF" 2>/dev/null | wc -l | tr -d ' ')
-Y_COUNT=$(bcftools view -r Y -H "$VCF" 2>/dev/null | wc -l | tr -d ' ')
+# Błąd bcftools przerywa skrypt (pipefail); 0 oznacza tu prawdziwy brak rekordów.
+X_COUNT=$(hx_query X '%POS\n' | wc -l | tr -d ' ')
+Y_COUNT=$(hx_query Y '%POS\n' | wc -l | tr -d ' ')
 
 echo "Warianty chr X: $X_COUNT"
 echo "Warianty chr Y: $Y_COUNT"
 
-if [ "$Y_COUNT" -gt "500" ]; then
+if [ "$X_COUNT" -eq 0 ] && [ "$Y_COUNT" -eq 0 ]; then
+    echo "Wniosek: brak danych o chr X/Y - nie można ustalić płci"
+    SEX=""
+elif [ "$Y_COUNT" -gt "500" ]; then
     echo "Wniosek: ♂ MĘŻCZYZNA (XY)"
     SEX="M"
 else
@@ -61,20 +96,19 @@ echo ""
 echo "👁️ KOLOR OCZU"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# rs12913832 - główny marker koloru oczu
-EYE_MAIN=$(bcftools query -r 15:28365618 -f '%REF %ALT [%GT]\n' "$VCF" 2>/dev/null | head -1)
+# rs12913832 - główny marker koloru oczu (HERC2, 15:28120472 A>G)
+GT=$(gt_at 15:28120472 A G rs12913832)
 
-if [ -n "$EYE_MAIN" ]; then
-    GT=$(echo $EYE_MAIN | awk '{print $3}')
+if [ -n "$GT" ]; then
     case $GT in
-        "0/0"|"0|0")
-            echo "rs12913832: A/A → 🔵 Prawdopodobnie NIEBIESKIE oczy"
+        "0/0")
+            echo "rs12913832: A/A → 🟤 Prawdopodobnie BRĄZOWE oczy"
             ;;
-        "0/1"|"0|1"|"1/0"|"1|0")
+        "0/1")
             echo "rs12913832: A/G → 🟢 Prawdopodobnie ZIELONE lub PIWNE oczy"
             ;;
-        "1/1"|"1|1")
-            echo "rs12913832: G/G → 🟤 Prawdopodobnie BRĄZOWE oczy"
+        "1/1")
+            echo "rs12913832: G/G → 🔵 Prawdopodobnie NIEBIESKIE oczy"
             ;;
         *)
             echo "rs12913832: $GT (nietypowy genotyp)"
@@ -92,12 +126,14 @@ echo ""
 echo "💇 KOLOR WŁOSÓW / RYZYKO RUDOŚCI"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# MC1R - rude włosy
+# MC1R - rude włosy: liczba alleli T rs1805007 (R151C, 16:89919436 GRCh38,
+# jedyny marker MC1R w tabeli kanonicznej; stare pozycje 16:89985844-89986144
+# były GRCh37).
 MC1R_COUNT=0
-for pos in 89985844 89985940 89986091 89986117 89986130 89986144; do
-    result=$(bcftools view -r "16:$pos" -H "$VCF" 2>/dev/null | wc -l)
-    MC1R_COUNT=$((MC1R_COUNT + result))
-done
+GT=$(gt_at 16:89919436 C T rs1805007)
+if [ -n "$GT" ]; then
+    d=$(hx_alt_dosage "$GT"); [ "$d" != NA ] && MC1R_COUNT=$((MC1R_COUNT + d))
+fi
 
 if [ "$MC1R_COUNT" -gt "0" ]; then
     echo "Warianty MC1R: $MC1R_COUNT → 🔴 Możliwe RUDE włosy lub piegi"
@@ -106,7 +142,7 @@ else
 fi
 
 # KITLG - blond
-BLOND=$(bcftools query -r 12:89328335 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+BLOND=$(hx_gt 12:89328335)  # TODO(build): unverified GRCh38
 if [ "$BLOND" == "0/1" ] || [ "$BLOND" == "1/1" ]; then
     echo "rs12821256: wariant → 👱 Skłonność do JASNYCH włosów"
 fi
@@ -119,18 +155,18 @@ echo ""
 echo "🥛 TOLERANCJA LAKTOZY"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-LCT=$(bcftools query -r 2:136608646 -f '%REF %ALT [%GT]\n' "$VCF" 2>/dev/null | head -1)
+# rs4988235 (LCT/MCM6 -13910C>T): 2:135851076 G>A na nici plus; A = tolerancja
+GT=$(gt_at 2:135851076 G A rs4988235)
 
-if [ -n "$LCT" ]; then
-    GT=$(echo $LCT | awk '{print $3}')
+if [ -n "$GT" ]; then
     case $GT in
-        "0/0"|"0|0")
+        "0/0")
             echo "rs4988235: C/C → ❌ NIETOLERANCJA laktozy (typ afrykański/azjatycki)"
             ;;
-        "0/1"|"0|1"|"1/0"|"1|0")
+        "0/1")
             echo "rs4988235: C/T → ⚠️ CZĘŚCIOWA tolerancja"
             ;;
-        "1/1"|"1|1")
+        "1/1")
             echo "rs4988235: T/T → ✅ PEŁNA tolerancja laktozy (typ europejski)"
             ;;
     esac
@@ -146,19 +182,21 @@ echo ""
 echo "☕ METABOLIZM KOFEINY"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-CAFFEINE=$(bcftools query -r 15:75041917 -f '%REF %ALT [%GT]\n' "$VCF" 2>/dev/null | head -1)
+# rs762551 (CYP1A2): 15:74749576 A>C; A = *1F szybki metabolizer
+CAF_REF=A; CAF_ALT=C
+GT=$(gt_at 15:74749576 "$CAF_REF" "$CAF_ALT" rs762551)
 
-if [ -n "$CAFFEINE" ]; then
-    GT=$(echo $CAFFEINE | awk '{print $3}')
+if [ -n "$GT" ]; then
+    LETTERS=$(gt_letters "$GT" "$CAF_REF" "$CAF_ALT")
     case $GT in
-        "0/0"|"0|0")
-            echo "rs762551: A/A → ⚡ SZYBKI metabolizer - kawa bezpieczna"
+        "0/0")
+            echo "rs762551: $LETTERS → ⚡ SZYBKI metabolizer - kawa bezpieczna"
             ;;
-        "0/1"|"0|1"|"1/0"|"1|0")
-            echo "rs762551: A/C → ⚠️ ŚREDNI metabolizer - ogranicz do 2-3 kaw"
+        "0/1")
+            echo "rs762551: $LETTERS → ⚠️ ŚREDNI metabolizer - ogranicz do 2-3 kaw"
             ;;
-        "1/1"|"1|1")
-            echo "rs762551: C/C → 🐢 WOLNY metabolizer - ogranicz kawę!"
+        "1/1")
+            echo "rs762551: $LETTERS → 🐢 WOLNY metabolizer - ogranicz kawę!"
             ;;
     esac
 else
@@ -173,12 +211,11 @@ echo ""
 echo "🍷 METABOLIZM ALKOHOLU"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Asian flush - ALDH2
-ALDH2=$(bcftools query -r 12:112241766 -f '%REF %ALT [%GT]\n' "$VCF" 2>/dev/null | head -1)
+# Asian flush - ALDH2 rs671: 12:111803962 G>A
+GT=$(gt_at 12:111803962 G A rs671)
 
-if [ -n "$ALDH2" ]; then
-    GT=$(echo $ALDH2 | awk '{print $3}')
-    if [ "$GT" != "0/0" ] && [ "$GT" != "0|0" ]; then
+if [ -n "$GT" ]; then
+    if [ "$GT" != "0/0" ]; then
         echo "rs671 ALDH2: wariant → 🔴 Asian flush! Zwiększone ryzyko raka przy alkoholu"
     else
         echo "rs671 ALDH2: G/G → ✅ Normalny metabolizm aldehydu octowego"
@@ -195,14 +232,23 @@ echo ""
 echo "🧠 APOE (Alzheimer / Serce)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-APOE1=$(bcftools query -r 19:45411941 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)  # rs429358
-APOE2=$(bcftools query -r 19:45412079 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)  # rs7412
+# rs429358 19:44908684 T>C (C = ε4), rs7412 19:44908822 C>T (T = ε2)
+APOE1=$(gt_at 19:44908684 T C rs429358)
+APOE2=$(gt_at 19:44908822 C T rs7412)
 
-echo "rs429358 (ε4): $APOE1"
-echo "rs7412 (ε2): $APOE2"
+if [ -n "$APOE1" ]; then
+    echo "rs429358 (ε4): $APOE1 ($(gt_letters "$APOE1" T C))"
+else
+    echo "rs429358 (ε4): brak danych"
+fi
+if [ -n "$APOE2" ]; then
+    echo "rs7412 (ε2): $APOE2 ($(gt_letters "$APOE2" C T))"
+else
+    echo "rs7412 (ε2): brak danych"
+fi
 
 # Interpretacja (uproszczona)
-if [[ "$APOE1" == "0/0"* ]] && [[ "$APOE2" == "0/0"* ]]; then
+if [[ "$APOE1" == "0/0" ]] && [[ "$APOE2" == "0/0" ]]; then
     echo "→ Prawdopodobnie ε3/ε3 ✅ OPTYMALNY"
 elif [[ "$APOE1" == *"1"* ]]; then
     echo "→ ⚠️ Obecny allel ε4 - podwyższone ryzyko Alzheimera"
@@ -216,18 +262,18 @@ echo ""
 echo "🧬 MTHFR (Metabolizm folianów)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-MTHFR=$(bcftools query -r 1:11856378 -f '%REF %ALT [%GT]\n' "$VCF" 2>/dev/null | head -1)
+# rs1801133 (C677T, nić minus): 1:11796321 G>A; A = 677T
+GT=$(gt_at 1:11796321 G A rs1801133)
 
-if [ -n "$MTHFR" ]; then
-    GT=$(echo $MTHFR | awk '{print $3}')
+if [ -n "$GT" ]; then
     case $GT in
-        "0/0"|"0|0")
+        "0/0")
             echo "rs1801133 C677T: C/C → ✅ Normalny enzym"
             ;;
-        "0/1"|"0|1"|"1/0"|"1|0")
+        "0/1")
             echo "rs1801133 C677T: C/T → ⚠️ 35% redukcja - rozważ metylofolian"
             ;;
-        "1/1"|"1|1")
+        "1/1")
             echo "rs1801133 C677T: T/T → 🔴 70% redukcja - POTRZEBNY metylofolian!"
             ;;
     esac
@@ -243,11 +289,11 @@ echo ""
 if [ "$SEX" == "M" ]; then
     echo "👨‍🦲 ŁYSIENIE ANDROGENOWE"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    
-    BALD=$(bcftools query -r 20:21985252 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
-    
+
+    BALD=$(hx_gt 20:21985252)  # TODO(build): unverified GRCh38
+
     if [ -n "$BALD" ]; then
-        if [ "$BALD" != "0/0" ] && [ "$BALD" != "0|0" ]; then
+        if [ "$BALD" != "0/0" ]; then
             echo "rs2180439: wariant → 📈 Zwiększone ryzyko łysienia"
         else
             echo "rs2180439: brak wariantu → Niższe ryzyko łysienia"
@@ -263,17 +309,21 @@ fi
 echo "🥦 PERCEPCJA SMAKU GORZKIEGO"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-BITTER=$(bcftools query -r 7:141672604 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+# rs713598 A49P (7:141972804 GRCh38, C>G): TAS2R38 leży na nici minus, więc
+# plus-strand C = Ala49 (AVI, non-taster), G = Pro49 (PAV, taster); genotyp
+# liczony jako dawka G = liczba alleli PAV.
+# TODO(build): unverified GRCh38 orientation (table row is 'unverified')
+BITTER=$(gt_at 7:141972804 C G rs713598)
 
 if [ -n "$BITTER" ]; then
     case $BITTER in
-        "0/0"|"0|0")
+        "1/1")
             echo "TAS2R38: PAV/PAV → 😖 Super-taster! Silnie czujesz gorzki smak"
             ;;
-        "0/1"|"0|1"|"1/0"|"1|0")
+        "0/1")
             echo "TAS2R38: PAV/AVI → 😐 Średnio czujesz gorzki smak"
             ;;
-        "1/1"|"1|1")
+        "0/0")
             echo "TAS2R38: AVI/AVI → 😋 Non-taster - nie czujesz gorzkiego!"
             ;;
     esac
@@ -287,19 +337,21 @@ echo ""
 echo "👂 TYP WOSKOWINY USZNEJ"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-EARWAX=$(bcftools query -r 16:48258198 -f '%REF %ALT [%GT]\n' "$VCF" 2>/dev/null | head -1)
+# rs17822931 (ABCC11): 16:48224287 C>T; C/C i C/T = mokra (dominująca), T/T = sucha
+EW_REF=C; EW_ALT=T
+GT=$(gt_at 16:48224287 "$EW_REF" "$EW_ALT" rs17822931)
 
-if [ -n "$EARWAX" ]; then
-    GT=$(echo $EARWAX | awk '{print $3}')
+if [ -n "$GT" ]; then
+    LETTERS=$(gt_letters "$GT" "$EW_REF" "$EW_ALT")
     case $GT in
-        "0/0"|"0|0")
-            echo "rs17822931: T/T → 💧 Mokra woskowina (typ europejski)"
+        "0/0")
+            echo "rs17822931: $LETTERS → 💧 Mokra woskowina (typ europejski)"
             ;;
-        "0/1"|"0|1"|"1/0"|"1|0")
-            echo "rs17822931: T/C → Mieszany typ"
+        "0/1")
+            echo "rs17822931: $LETTERS → 💧 Mokra woskowina (allel mokry jest dominujący)"
             ;;
-        "1/1"|"1|1")
-            echo "rs17822931: C/C → 🔸 Sucha woskowina (typ azjatycki)"
+        "1/1")
+            echo "rs17822931: $LETTERS → 🔸 Sucha woskowina (typ azjatycki)"
             ;;
     esac
 fi
@@ -312,15 +364,9 @@ echo ""
 echo "☀️ ODRUCH KICHANIA NA SŁOŃCE (photic sneeze)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-SNEEZE=$(bcftools query -r 2:135851076 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
-
-if [ -n "$SNEEZE" ]; then
-    if [ "$SNEEZE" != "0/0" ] && [ "$SNEEZE" != "0|0" ]; then
-        echo "rs10427255: wariant → 🤧 TAK - kichasz patrząc na słońce!"
-    else
-        echo "rs10427255: brak → Nie kichasz na słońce"
-    fi
-fi
+# Pozycja GRCh38 rs10427255 (~2:145.37 Mb, okolice ZEB2) nie została
+# zweryfikowana; poprzednio odczytywano tu genotyp LCT rs4988235 (2:135851076).
+echo "rs10427255: pozycja niezweryfikowana - pominięto"
 echo ""
 
 #===============================================================================
@@ -330,18 +376,18 @@ echo ""
 echo "💪 GENETYKA SPORTOWA"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-ACTN3=$(bcftools query -r 11:66560624 -f '%REF %ALT [%GT]\n' "$VCF" 2>/dev/null | head -1)
+# rs1815739 (ACTN3 R577X): 11:66560624 C>T
+GT=$(gt_at 11:66560624 C T rs1815739)
 
-if [ -n "$ACTN3" ]; then
-    GT=$(echo $ACTN3 | awk '{print $3}')
+if [ -n "$GT" ]; then
     case $GT in
-        "0/0"|"0|0")
+        "0/0")
             echo "ACTN3 rs1815739: C/C (R/R) → 🏋️ ELITARNA genetyka siłowa!"
             ;;
-        "0/1"|"0|1"|"1/0"|"1|0")
+        "0/1")
             echo "ACTN3 rs1815739: C/T (R/X) → 🏃 Dobra mieszanka siła/wytrzymałość"
             ;;
-        "1/1"|"1|1")
+        "1/1")
             echo "ACTN3 rs1815739: T/T (X/X) → 🚴 Genetyka wytrzymałościowa"
             ;;
     esac
@@ -358,3 +404,4 @@ echo "╚═══════════════════════�
 echo ""
 echo "Więcej analiz dostępnych przez: ./helixight_local_toolkit.sh $VCF"
 echo ""
+hx_report_coverage

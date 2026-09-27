@@ -1,0 +1,21 @@
+# Dependency update checks. Pull requests are opened for newer versions of the
+# Python packages (frontend and tests), the Docker base image and the GitHub
+# Actions used in .github/workflows/ci.yml.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "pip"
+    directory: "/tests"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

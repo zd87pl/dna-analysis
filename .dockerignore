@@ -8,8 +8,8 @@
 !README.md
 LICENSE
 
-# Data directories (mounted as volumes)
-data/
+# Data directories (mounted as volumes); the bundled sample is re-included at the end
+data/*
 results/
 reference/
 
@@ -57,3 +57,7 @@ build/
 *.fa.fai
 *.fasta
 *.fasta.fai
+
+# Bundled sample: fallback for plain `docker run` (docker compose mounts ./data over it)
+!data/sample_genome.vcf.gz
+!data/sample_genome.vcf.gz.tbi

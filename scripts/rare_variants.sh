@@ -13,8 +13,17 @@
 #
 #===============================================================================
 
-VCF="${1:-saryd_variants.vcf.gz}"
+# Shared VCF helpers (hx_prepare_vcf, hx_count, hx_report_coverage, ...)
+# shellcheck source=lib/vcf_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/vcf_common.sh"
+
+hx_require_arg "${1:-}" "$(basename "$0") <variants.vcf.gz>"
+VCF="$1"
 OUTDIR="rare_variants_analysis"
+
+# Build (or reuse) a bgzip+indexed, bare-contig, GRCh38-checked working copy;
+# every bcftools call below reads $HX_VCF.
+hx_prepare_vcf "$VCF"
 mkdir -p "$OUTDIR"
 
 echo ""
@@ -36,22 +45,27 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # Calkowita liczba wariantow
-TOTAL_VARIANTS=$(bcftools view -H "$VCF" 2>/dev/null | wc -l)
+TOTAL_VARIANTS=$(bcftools view -H "$HX_VCF" | wc -l)
 echo "   Calkowita liczba wariantow: $TOTAL_VARIANTS"
 
 # SNP vs Indel
-SNPS=$(bcftools view -v snps -H "$VCF" 2>/dev/null | wc -l)
-INDELS=$(bcftools view -v indels -H "$VCF" 2>/dev/null | wc -l)
+SNPS=$(bcftools view -v snps -H "$HX_VCF" | wc -l)
+INDELS=$(bcftools view -v indels -H "$HX_VCF" | wc -l)
 echo "   SNP: $SNPS"
 echo "   Indele: $INDELS"
 
 # Heterozygoty vs homozygoty
-HETS=$(bcftools view -H "$VCF" 2>/dev/null | awk -F'\t' '{print $NF}' | grep -c "0/1\|0|1\|1/0\|1|0")
-HOMS=$(bcftools view -H "$VCF" 2>/dev/null | awk -F'\t' '{print $NF}' | grep -c "1/1\|1|1")
+HETS=$(bcftools view -H "$HX_VCF" | awk -F'\t' '{print $NF}' | grep -c "0/1\|0|1\|1/0\|1|0")
+HOMS=$(bcftools view -H "$HX_VCF" | awk -F'\t' '{print $NF}' | grep -c "1/1\|1|1")
 echo "   Heterozygoty: $HETS"
 echo "   Homozygoty ALT: $HOMS"
 
-HET_HOM_RATIO=$(echo "scale=2; $HETS / $HOMS" | bc 2>/dev/null || echo "N/A")
+# awk instead of bc (no extra dependency; bc prints nothing useful on x/0)
+if [ "$HOMS" -gt 0 ]; then
+    HET_HOM_RATIO=$(awk -v h="$HETS" -v m="$HOMS" 'BEGIN{printf "%.2f", h/m}')
+else
+    HET_HOM_RATIO="N/A"
+fi
 echo "   Stosunek Het/Hom: $HET_HOM_RATIO (norma: 1.5-2.0)"
 
 echo ""
@@ -68,15 +82,19 @@ echo "(Na podstawie struktury VCF - pelna analiza wymaga bazy gnomAD)"
 echo ""
 
 # Policz warianty z rsID vs bez
-VARIANTS_WITH_RS=$(bcftools query -f '%ID\n' "$VCF" 2>/dev/null | grep -c "^rs")
+VARIANTS_WITH_RS=$(bcftools query -f '%ID\n' "$HX_VCF" | grep -c "^rs")
 VARIANTS_NO_RS=$((TOTAL_VARIANTS - VARIANTS_WITH_RS))
 
 echo "   Warianty ze znanym rsID (w dbSNP): $VARIANTS_WITH_RS"
 echo "   Warianty BEZ rsID (potencjalnie rzadkie/nowe): $VARIANTS_NO_RS"
 echo ""
 
-PERCENT_NOVEL=$(echo "scale=1; $VARIANTS_NO_RS * 100 / $TOTAL_VARIANTS" | bc 2>/dev/null || echo "N/A")
-echo "   Procent potencjalnie rzadkich/nowych: ${PERCENT_NOVEL}%"
+if [ "$TOTAL_VARIANTS" -gt 0 ]; then
+    PERCENT_NOVEL=$(awk -v n="$VARIANTS_NO_RS" -v t="$TOTAL_VARIANTS" 'BEGIN{printf "%.1f%%", n*100/t}')
+else
+    PERCENT_NOVEL="N/A"
+fi
+echo "   Procent potencjalnie rzadkich/nowych: ${PERCENT_NOVEL}"
 echo ""
 
 # Kategoryzacja (szacunkowa)
@@ -106,7 +124,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # Zapisz warianty bez rsID do pliku
-bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%ID\t[%GT]\n' "$VCF" 2>/dev/null | \
+bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%ID\t[%GT]\n' "$HX_VCF" | \
     grep -v "^#" | \
     awk '$5 == "." {print}' | \
     head -1000 > "$OUTDIR/novel_variants.txt"
@@ -119,9 +137,10 @@ echo ""
 echo "   Rozklad nowych wariantow po chromosomach:"
 echo ""
 for chr in {1..22} X Y; do
-    count=$(grep -c "^${chr}\s\|^chr${chr}\s" "$OUTDIR/novel_variants.txt" 2>/dev/null || echo "0")
+    # hx_count always prints exactly one number (grep -c || echo 0 gave "0\n0")
+    count=$(hx_count "$OUTDIR/novel_variants.txt" "^${chr}\s\|^chr${chr}\s")
     if [ "$count" -gt 0 ]; then
-        bar=$(printf '%*s' $((count / 50)) | tr ' ' '█')
+        bar=$(printf '%*s' "$((count / 50))" '' | tr ' ' '█')
         printf "   chr%-2s: %6d %s\n" "$chr" "$count" "$bar"
     fi
 done
@@ -168,7 +187,7 @@ CFTR|7:117287120-117715971
 HFE|6:26087281-26098343
 "
 
-> "$OUTDIR/clinical_genes_variants.txt"
+: > "$OUTDIR/clinical_genes_variants.txt"
 
 echo "   GEN         | WARIANTY | BEZ rsID | KOMENTARZ"
 echo "   ───────────────────────────────────────────────────────────────"
@@ -176,24 +195,15 @@ echo "   ───────────────────────�
 while IFS='|' read -r gene region; do
     [ -z "$gene" ] && continue
     
-    chr=$(echo "$region" | cut -d: -f1)
-    
-    # Policz warianty w tym genie
-    total=$(bcftools view -r "$region" -H "$VCF" 2>/dev/null | wc -l)
-    
-    if [ "$total" -eq 0 ]; then
-        # Sprobuj z 'chr'
-        total=$(bcftools view -r "chr${region}" -H "$VCF" 2>/dev/null | wc -l)
-    fi
-    
+    # Policz warianty w tym genie ($HX_VCF has bare contig names, so the old
+    # 'chr' retry is no longer needed)
+    total=$(bcftools view -r "$region" -H "$HX_VCF" | wc -l)
+
     if [ "$total" -gt 0 ]; then
-        # Policz bez rsID
-        no_rs=$(bcftools query -r "$region" -f '%ID\n' "$VCF" 2>/dev/null | grep -c "^\.$" || echo "0")
-        
-        if [ -z "$no_rs" ] || [ "$no_rs" == "" ]; then
-            no_rs=$(bcftools query -r "chr${region}" -f '%ID\n' "$VCF" 2>/dev/null | grep -c "^\.$" || echo "0")
-        fi
-        
+        # Policz bez rsID (grep -c always prints exactly one number; the old
+        # `|| echo "0"` appended a second "0")
+        no_rs=$(bcftools query -r "$region" -f '%ID\n' "$HX_VCF" | grep -c "^\.$")
+
         comment=""
         if [ "$no_rs" -gt 5 ]; then
             comment="⚠️ Wiele rzadkich!"
@@ -204,7 +214,7 @@ while IFS='|' read -r gene region; do
         printf "   %-12s | %8d | %8s | %s\n" "$gene" "$total" "$no_rs" "$comment"
         
         # Zapisz szczegoly do pliku
-        bcftools query -r "$region" -f '%CHROM\t%POS\t%REF\t%ALT\t%ID\n' "$VCF" 2>/dev/null | \
+        bcftools query -r "$region" -f '%CHROM\t%POS\t%REF\t%ALT\t%ID\n' "$HX_VCF" | \
             awk -v gene="$gene" '{print gene"\t"$0}' >> "$OUTDIR/clinical_genes_variants.txt"
     fi
     
@@ -237,12 +247,8 @@ for gene_info in "BRCA1|17:43044295-43125483" "BRCA2|13:32315474-32400266" "TP53
     region=$(echo "$gene_info" | cut -d'|' -f2)
     
     # Znajdz warianty bez rsID
-    novel=$(bcftools query -r "$region" -f '%CHROM:%POS\t%REF>%ALT\t%ID\n' "$VCF" 2>/dev/null | grep "\.$" | head -3)
-    
-    if [ -z "$novel" ]; then
-        novel=$(bcftools query -r "chr${region}" -f '%CHROM:%POS\t%REF>%ALT\t%ID\n' "$VCF" 2>/dev/null | grep "\.$" | head -3)
-    fi
-    
+    novel=$(bcftools query -r "$region" -f '%CHROM:%POS\t%REF>%ALT\t%ID\n' "$HX_VCF" | grep "\.$" | head -3)
+
     if [ -n "$novel" ]; then
         echo "   $gene:"
         echo "$novel" | while read line; do
@@ -270,29 +276,31 @@ echo ""
 # Tranzycje: A<>G, C<>T
 # Transwersje: wszystkie inne
 
-TI=$(bcftools query -f '%REF %ALT\n' "$VCF" 2>/dev/null | \
-    awk '(($1=="A" && $2=="G") || ($1=="G" && $2=="A") || 
-          ($1=="C" && $2=="T") || ($1=="T" && $2=="C")) {count++} 
-         END {print count}')
+TI=$(bcftools query -f '%REF %ALT\n' "$HX_VCF" | \
+    awk '(($1=="A" && $2=="G") || ($1=="G" && $2=="A") ||
+          ($1=="C" && $2=="T") || ($1=="T" && $2=="C")) {count++}
+         END {print count+0}')
 
-TV=$(bcftools query -f '%REF %ALT\n' "$VCF" 2>/dev/null | \
-    awk '!(($1=="A" && $2=="G") || ($1=="G" && $2=="A") || 
-           ($1=="C" && $2=="T") || ($1=="T" && $2=="C")) && 
-         length($1)==1 && length($2)==1 {count++} 
-         END {print count}')
+TV=$(bcftools query -f '%REF %ALT\n' "$HX_VCF" | \
+    awk '!(($1=="A" && $2=="G") || ($1=="G" && $2=="A") ||
+           ($1=="C" && $2=="T") || ($1=="T" && $2=="C")) &&
+         length($1)==1 && length($2)==1 {count++}
+         END {print count+0}')
 
+TITV_RATIO="N/A"
 if [ -n "$TI" ] && [ -n "$TV" ] && [ "$TV" -gt 0 ]; then
-    TITV_RATIO=$(echo "scale=2; $TI / $TV" | bc)
+    # awk instead of bc: no extra dependency
+    TITV_RATIO=$(awk -v t="$TI" -v v="$TV" 'BEGIN{printf "%.2f", t/v}')
     echo "   Tranzycje (Ti): $TI"
     echo "   Transwersje (Tv): $TV"
     echo "   Stosunek Ti/Tv: $TITV_RATIO"
     echo ""
-    
-    if (( $(echo "$TITV_RATIO >= 2.0 && $TITV_RATIO <= 2.2" | bc -l) )); then
+
+    if awk -v r="$TITV_RATIO" 'BEGIN{exit !(r >= 2.0 && r <= 2.2)}'; then
         echo "   ✅ Ti/Tv w normie dla WGS (2.0-2.2)"
-    elif (( $(echo "$TITV_RATIO >= 2.8 && $TITV_RATIO <= 3.3" | bc -l) )); then
+    elif awk -v r="$TITV_RATIO" 'BEGIN{exit !(r >= 2.8 && r <= 3.3)}'; then
         echo "   ✅ Ti/Tv w normie dla WES/exome (2.8-3.3)"
-    elif (( $(echo "$TITV_RATIO < 2.0" | bc -l) )); then
+    elif awk -v r="$TITV_RATIO" 'BEGIN{exit !(r < 2.0)}'; then
         echo "   ⚠️ Ti/Tv nizsze niz oczekiwane - moze wskazywac na wiecej falszywie pozytywnych"
     fi
 else
@@ -330,8 +338,18 @@ echo "   • ~50-100 to warianty de novo (nowe mutacje)"
 echo "   • Twoj genom zawiera $VARIANTS_NO_RS wariantow bez znanego rsID"
 echo "     → To nie znaczy, ze sa chorobowe - wiekszosc jest neutralna!"
 echo ""
+echo "   ✅ Przeanalizowano $TOTAL_VARIANTS wariantow: $VARIANTS_NO_RS bez rsID (potencjalnie rzadkich/nowych)"
+echo ""
 
 echo "📁 PLIKI WYNIKOWE:"
 echo "   • $OUTDIR/novel_variants.txt - warianty bez rsID"
 echo "   • $OUTDIR/clinical_genes_variants.txt - warianty w genach klinicznych"
 echo ""
+# This script summarises whole-file statistics rather than fixed markers: the
+# input record set counts as one queried "marker", found when the VCF carries
+# at least one record (a header-only file yields 0/1 = "no usable data").
+# shellcheck disable=SC2034  # read by hx_report_coverage (scripts/lib/vcf_common.sh)
+HX_QUERIED=1
+# shellcheck disable=SC2034  # read by hx_report_coverage
+HX_FOUND=$([[ ${TOTAL_VARIANTS:-0} -gt 0 ]] && echo 1 || echo 0)
+hx_report_coverage

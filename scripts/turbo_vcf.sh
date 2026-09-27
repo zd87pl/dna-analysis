@@ -6,7 +6,7 @@
 
 set -e
 
-BAM="$1"
+BAM="${1:-}"
 OUTPUT="${2:-variants.vcf.gz}"
 REFERENCE="${3:-human_g1k_v37.fasta}"
 THREADS="${4:-10}"  # M4 Air ma 10 rdzeni (4P + 6E)
@@ -26,12 +26,17 @@ echo "║         Zoptymalizowany dla Apple Silicon M4                      ║"
 echo "╚═══════════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# Sprawdź argumenty
-if [ -z "$BAM" ]; then
-    echo "Użycie: $0 <plik.bam> [output.vcf.gz] [reference.fa] [threads]"
-    echo ""
-    echo "Przykład:"
-    echo "  $0 saryd.bam saryd_variants.vcf.gz human_g1k_v37.fasta 10"
+# Sprawdź argumenty (BAM jest wymagany)
+usage() {
+    echo "Użycie: $0 <plik.bam> [output.vcf.gz] [reference.fa] [threads]" >&2
+    echo "" >&2
+    echo "Przykład:" >&2
+    echo "  $0 sample.bam sample_variants.vcf.gz GRCh38.fa 10" >&2
+    exit 1
+}
+[ -n "$BAM" ] || usage
+if [ ! -f "$BAM" ]; then
+    echo -e "${RED}✗${NC} Brak pliku BAM: $BAM" >&2
     exit 1
 fi
 
@@ -55,7 +60,7 @@ echo -e "\n${YELLOW}[1/5] Sprawdzanie plików...${NC}"
 # Sprawdź czy BAM jest zindeksowany
 if [ ! -f "${BAM}.bai" ] && [ ! -f "${BAM%.*}.bai" ]; then
     echo "  Indeksowanie BAM..."
-    samtools index -@ $THREADS "$BAM"
+    samtools index -@ "$THREADS" "$BAM"
 fi
 echo -e "  ${GREEN}✓${NC} BAM zindeksowany"
 
@@ -70,10 +75,35 @@ if [ ! -f "${REFERENCE}.fai" ]; then
 fi
 echo -e "  ${GREEN}✓${NC} Referencja gotowa"
 
-# Pobierz listę chromosomów
-CHROMOSOMES=$(samtools idxstats "$BAM" | cut -f1 | grep -v '^\*$' | head -25)
-NUM_CHROM=$(echo "$CHROMOSOMES" | wc -l | tr -d ' ')
+# Pobierz listę chromosomów. Nazwy kontigów pochodzą z nagłówka BAM (dane
+# wejściowe!): dopuszczamy tylko bezpieczne znaki i nigdy nie wklejamy ich do
+# łańcucha poleceń (patrz xargs poniżej).
+ALL_CONTIGS=$(samtools idxstats "$BAM" | cut -f1 | grep -v '^\*$' || true)
+BAD_CONTIGS=$(echo "$ALL_CONTIGS" | grep -v '^$' | grep -Ev '^[0-9A-Za-z_.-]+$' || true)
+if [ -n "$BAD_CONTIGS" ]; then
+    echo -e "  ${RED}✗${NC} Niedozwolone nazwy kontigów w nagłówku BAM (dozwolone: [0-9A-Za-z_.-]):" >&2
+    echo "$BAD_CONTIGS" | sed 's/^/      /' >&2
+    exit 1
+fi
+CHROMOSOMES=$(echo "$ALL_CONTIGS" | head -25)
+# grep -c prints 0 but exits 1 on empty input; without `|| true` set -e would
+# abort here before the diagnostic below.
+NUM_CHROM=$(echo "$CHROMOSOMES" | grep -c . || true)
+if [ "$NUM_CHROM" -eq 0 ]; then
+    echo -e "  ${RED}✗${NC} Nie znaleziono kontigów w nagłówku BAM" >&2
+    exit 1
+fi
 echo -e "  ${GREEN}✓${NC} Znaleziono $NUM_CHROM chromosomów"
+
+# Każdy kontig BAM musi istnieć w referencji: bcftools mpileup kończy się
+# kodem 0 i pustym VCF dla kontigu, którego referencja nie zawiera.
+MISSING_CONTIGS=$(echo "$CHROMOSOMES" | grep -vxF -f <(cut -f1 "${REFERENCE}.fai") || true)
+if [ -n "$MISSING_CONTIGS" ]; then
+    echo -e "  ${RED}✗${NC} Kontigi BAM nieobecne w referencji ${REFERENCE}:" >&2
+    echo "$MISSING_CONTIGS" | sed 's/^/      /' >&2
+    echo "  Sprawdź prefiks 'chr' i wersję genomu (BAM i referencja muszą się zgadzać)." >&2
+    exit 1
+fi
 
 #===============================================================================
 # KROK 2: Parallel Variant Calling
@@ -89,8 +119,9 @@ process_chromosome() {
     local ref=$3
     local temp_dir=$4
     local output_vcf="${temp_dir}/${chrom}.vcf.gz"
-    
-    # Variant calling dla chromosomu
+
+    # Variant calling dla chromosomu. Błędy nie są wyciszane, a każdy
+    # niezerowy status (pipefail) przerywa proces potomny, co xargs propaguje.
     bcftools mpileup \
         -Ou \
         -f "$ref" \
@@ -98,15 +129,15 @@ process_chromosome() {
         --max-depth 200 \
         --min-MQ 20 \
         --min-BQ 20 \
-        "$bam" 2>/dev/null | \
+        "$bam" | \
     bcftools call \
         -mv \
         -Oz \
-        -o "$output_vcf" 2>/dev/null
-    
+        -o "$output_vcf"
+
     # Indeksuj
-    tabix -p vcf "$output_vcf" 2>/dev/null
-    
+    tabix -p vcf "$output_vcf"
+
     echo "  ✓ $chrom"
 }
 
@@ -116,8 +147,13 @@ export -f process_chromosome
 # Dla M4 Air z 24GB: 8 procesów * ~2GB = 16GB używane
 MAX_PARALLEL=8
 
-echo "$CHROMOSOMES" | xargs -P $MAX_PARALLEL -I {} bash -c \
-    "process_chromosome {} '$BAM' '$REFERENCE' '$TEMP_DIR'"
+# Nazwa kontigu i ścieżki są przekazywane jako argumenty pozycyjne, nigdy
+# wklejane do łańcucha poleceń (kontig "chr2;cmd" nie wykona cmd).
+if ! echo "$CHROMOSOMES" | xargs -P "$MAX_PARALLEL" -I {} bash -c \
+    'set -euo pipefail; process_chromosome "$1" "$2" "$3" "$4"' _ {} "$BAM" "$REFERENCE" "$TEMP_DIR"; then
+    echo -e "  ${RED}✗${NC} Variant calling nie powiódł się dla co najmniej jednego chromosomu" >&2
+    exit 1
+fi
 
 echo -e "  ${GREEN}✓${NC} Wszystkie chromosomy przetworzone"
 echo "  Zakończono: $(date '+%H:%M:%S')"
@@ -130,13 +166,16 @@ echo -e "\n${YELLOW}[3/5] Łączenie plików VCF...${NC}"
 
 # Lista plików do połączenia (w kolejności chromosomów)
 VCF_LIST="${TEMP_DIR}/vcf_list.txt"
-> "$VCF_LIST"
+: > "$VCF_LIST"
 
+# Brak pliku (lub indeksu) dla chromosomu to błąd, nie cichy brak danych.
 for chrom in $CHROMOSOMES; do
     vcf_file="${TEMP_DIR}/${chrom}.vcf.gz"
-    if [ -f "$vcf_file" ]; then
-        echo "$vcf_file" >> "$VCF_LIST"
+    if [ ! -s "$vcf_file" ] || [ ! -s "${vcf_file}.tbi" ]; then
+        echo -e "  ${RED}✗${NC} Brak wyniku dla chromosomu $chrom ($vcf_file)" >&2
+        exit 1
     fi
+    echo "$vcf_file" >> "$VCF_LIST"
 done
 
 # Połącz wszystkie VCF
@@ -144,7 +183,7 @@ bcftools concat \
     -f "$VCF_LIST" \
     -Oz \
     -o "$OUTPUT" \
-    --threads $THREADS
+    --threads "$THREADS"
 
 echo -e "  ${GREEN}✓${NC} VCF połączony"
 

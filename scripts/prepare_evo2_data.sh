@@ -4,9 +4,18 @@
 # Ekstrakcja sekwencji z BAM do analizy na RunPod
 #===============================================================================
 
-BAM="$1"
+BAM="${1:-}"
 OUTPUT_DIR="${2:-evo2_data}"
 REFERENCE="${3:-}"
+
+# Skrypt wymaga wyrownanego BAM/CRAM (nie VCF!): sprawdz przed utworzeniem
+# katalogu, inaczej VCF daje 102 pliki FASTA "0x coverage" i baner GOTOWE.
+[[ -f "$BAM" && "$BAM" =~ \.(bam|cram)$ ]] || {
+    echo "prepare_evo2_data.sh requires an aligned BAM/CRAM file, got: ${BAM:-<none>}" >&2
+    echo "Usage: $0 <sample.bam> [output_dir] [reference.fa]" >&2
+    exit 2
+}
+samtools quickcheck "$BAM" || exit 2
 
 echo "╔═══════════════════════════════════════════════════════════════════╗"
 echo "║              PRZYGOTOWANIE DANYCH DLA EVO2                        ║"
@@ -103,12 +112,6 @@ extract_consensus_from_bam() {
     local region=$2
     local output=$3
     
-    # Rozdziel region
-    local chrom=$(echo $region | cut -d: -f1)
-    local coords=$(echo $region | cut -d: -f2)
-    local start=$(echo $coords | cut -d- -f1)
-    local end=$(echo $coords | cut -d- -f2)
-    
     echo "  Ekstrakcja $gene ($region)..."
     
     # Metoda 1: Jeśli mamy referencję - użyj consensus
@@ -162,11 +165,12 @@ extract_with_context() {
     local region=$2
     local context_size=${3:-1000}  # 1kb kontekstu z każdej strony
     
-    local chrom=$(echo $region | cut -d: -f1)
-    local coords=$(echo $region | cut -d: -f2)
-    local start=$(echo $coords | cut -d- -f1)
-    local end=$(echo $coords | cut -d- -f2)
-    
+    local chrom coords start end
+    chrom=${region%%:*}
+    coords=${region#*:}
+    start=${coords%%-*}
+    end=${coords#*-}
+
     # Rozszerz region o kontekst
     local ext_start=$((start - context_size))
     local ext_end=$((end + context_size))
@@ -247,7 +251,7 @@ class VariantPrediction:
     confidence: float
 
 class EVO2Analyzer:
-    def __init__(self, model_path: str = "evo2-40b"):
+    def __init__(self, model_path: str = "evo2-40b", trust_remote_code: bool = False):
         """Inicjalizacja modelu EVO2"""
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Używam urządzenia: {self.device}")
@@ -257,8 +261,12 @@ class EVO2Analyzer:
             # Dostosuj import do rzeczywistej biblioteki EVO2
             from transformers import AutoModel, AutoTokenizer
             
-            self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-            self.model = AutoModel.from_pretrained(model_path, trust_remote_code=True)
+            # trust_remote_code=True executes Python code shipped inside the
+            # model repository on this machine, with your privileges. It is
+            # OFF by default; pass --trust-remote-code only for a model repo
+            # you have inspected (ideally pinned to a specific revision).
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
+            self.model = AutoModel.from_pretrained(model_path, trust_remote_code=trust_remote_code)
             self.model.to(self.device)
             self.model.eval()
             print("Model EVO2 załadowany pomyślnie")
@@ -390,6 +398,9 @@ def main():
     parser.add_argument('--sequences', default='sequences/', help='Folder z FASTA')
     parser.add_argument('--output', default='evo2_results.json', help='Plik wynikowy')
     parser.add_argument('--model', default='evo2-40b', help='Ścieżka do modelu')
+    parser.add_argument('--trust-remote-code', action='store_true', default=False,
+                        help='Allow transformers to run custom code from the model repo '
+                             '(security risk: only for repos you have inspected)')
     args = parser.parse_args()
     
     print("=" * 60)
@@ -397,7 +408,7 @@ def main():
     print("=" * 60)
     
     # Inicjalizacja
-    analyzer = EVO2Analyzer(args.model)
+    analyzer = EVO2Analyzer(args.model, trust_remote_code=args.trust_remote_code)
     
     # Znajdź pliki FASTA
     fasta_files = list(Path(args.sequences).glob("*.fasta"))

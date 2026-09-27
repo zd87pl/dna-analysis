@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+*.env
+
+# Analysis output (generated at runtime; results/ and data/ keep their .gitkeep)
+results/*
+!results/.gitkeep
+results/.cache/
+*_analysis/
+*_results/
+helixight_results/
+personalized_protocol/
+evo2_data/
+helixight_output/
+
+# User genomic data — never commit real genomes (sample files are whitelisted)
+*.vcf
+*.vcf.gz
+*.tbi
+*.csi
+data/*
+!data/.gitkeep
+!data/sample_genome.vcf
+!data/sample_genome.vcf.gz
+!data/sample_genome.vcf.gz.tbi
+*.bam
+*.bam.bai
+*.cram
+*.crai
+*.fa
+*.fa.fai
+*.fasta
+*.fasta.fai
+reference/
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*~
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo

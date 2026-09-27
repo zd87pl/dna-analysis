@@ -6,14 +6,13 @@
 
 set -e
 
-BAM="$1"
+BAM="${1:-}"
 OUTPUT="${2:-variants.vcf.gz}"
 REFERENCE="${3:-human_g1k_v37.fasta}"
 
 # M4 Air specs
 TOTAL_CORES=10      # 4 Performance + 6 Efficiency
 PARALLEL_JOBS=6     # Zostaw trochę dla systemu
-RAM_GB=24
 MAX_DEPTH=150       # Mniej = szybciej (standardowo 250)
 
 echo "╔═══════════════════════════════════════════════════════════════════╗"
@@ -22,12 +21,24 @@ echo "║              M4 MacBook Air 24GB Optimized                        ║"
 echo "╚═══════════════════════════════════════════════════════════════════╝"
 
 if [ -z "$BAM" ] || [ -z "$REFERENCE" ]; then
-    echo "Użycie: $0 <plik.bam> [output.vcf.gz] <reference.fa>"
+    echo "Użycie: $0 <plik.bam> [output.vcf.gz] [reference.fa]" >&2
     exit 1
+fi
+if [ ! -f "$BAM" ]; then
+    echo "BŁĄD: Brak pliku BAM: $BAM" >&2
+    exit 1
+fi
+if [ ! -f "$REFERENCE" ]; then
+    echo "BŁĄD: Brak pliku referencyjnego: $REFERENCE" >&2
+    exit 1
+fi
+if [ ! -f "${REFERENCE}.fai" ]; then
+    samtools faidx "$REFERENCE"
 fi
 
 TEMP_DIR=$(mktemp -d)
-trap "rm -rf $TEMP_DIR" EXIT
+# Pojedyncze cudzysłowy: $TEMP_DIR rozwijany przy wyjściu, nie teraz
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
 START_TIME=$(date +%s)
 
@@ -41,8 +52,10 @@ START_TIME=$(date +%s)
 # (4GB RAM disk)
 
 if [ -d "/Volumes/RAMDisk" ]; then
+    rm -rf "$TEMP_DIR"
     TEMP_DIR="/Volumes/RAMDisk/vcf_temp_$$"
     mkdir -p "$TEMP_DIR"
+    trap 'rm -rf "$TEMP_DIR"' EXIT
     echo "🚀 Używam RAM disk dla max szybkości!"
 fi
 
@@ -62,7 +75,7 @@ generate_regions() {
     local output=$3
     
     # Pobierz długości chromosomów
-    awk -v n=$num_regions '
+    awk -v n="$num_regions" '
     BEGIN { total = 0 }
     { 
         chroms[NR] = $1
@@ -113,22 +126,23 @@ process_region() {
     local temp_dir=$5
     
     # Bezpieczna nazwa pliku
-    local safe_name=$(echo "$region" | tr ':' '_' | tr '-' '_')
+    local safe_name
+    safe_name=$(echo "$region" | tr ':' '_' | tr '-' '_')
     local output_vcf="${temp_dir}/${idx}_${safe_name}.vcf.gz"
-    
+
     bcftools mpileup \
         -Ou \
         -f "$ref" \
         -r "$region" \
-        --max-depth 150 \
+        --max-depth "$MAX_DEPTH" \
         --min-MQ 20 \
         --min-BQ 20 \
         --no-BAQ \
-        "$bam" 2>/dev/null | \
+        "$bam" | \
     bcftools call \
         -mv \
         -Oz \
-        -o "$output_vcf" 2>/dev/null
+        -o "$output_vcf"
     
     # Indeksuj tylko jeśli plik istnieje i ma zawartość
     if [ -s "$output_vcf" ]; then
@@ -137,23 +151,34 @@ process_region() {
 }
 
 export -f process_region
+export MAX_DEPTH
 
 # Progress tracking
 PROGRESS_FILE="$TEMP_DIR/progress"
 echo 0 > "$PROGRESS_FILE"
 
-# Uruchom równolegle z numeracją (dla poprawnej kolejności)
-cat -n "$REGIONS_FILE" | \
-    xargs -P $PARALLEL_JOBS -L 1 bash -c '
-        idx=$1
-        region=$2
-        process_region "$region" "$idx" "'"$BAM"'" "'"$REFERENCE"'" "'"$TEMP_DIR"'"
-        
+# Uruchom równolegle z numeracją (dla poprawnej kolejności).
+# Wszystkie wartości (ścieżki, region) idą jako argumenty pozycyjne, nigdy
+# wklejane do łańcucha poleceń: -L 1 dokleja "idx region" po stałych
+# argumentach, więc $1..$5 = BAM REF TEMP_DIR PROGRESS_FILE NUM_REGIONS,
+# $6 = idx, $7 = region.
+if ! cat -n "$REGIONS_FILE" | \
+    xargs -P "$PARALLEL_JOBS" -L 1 bash -c '
+        set -euo pipefail
+        bam=$1; ref=$2; temp_dir=$3; progress_file=$4; num_regions=$5
+        idx=$6
+        region=$7
+        process_region "$region" "$idx" "$bam" "$ref" "$temp_dir"
+
         # Update progress
-        current=$(cat "'"$PROGRESS_FILE"'")
-        echo $((current + 1)) > "'"$PROGRESS_FILE"'"
-        printf "\r  Postęp: %d/'"$NUM_REGIONS"' regionów" $((current + 1))
-    ' _
+        current=$(cat "$progress_file")
+        echo $((current + 1)) > "$progress_file"
+        printf "\r  Postęp: %d/%d regionów" $((current + 1)) "$num_regions"
+    ' _ "$BAM" "$REFERENCE" "$TEMP_DIR" "$PROGRESS_FILE" "$NUM_REGIONS"; then
+    echo "" >&2
+    echo "BŁĄD: Variant calling nie powiódł się dla co najmniej jednego regionu" >&2
+    exit 1
+fi
 
 echo ""
 echo "  Zakończono: $(date '+%H:%M:%S')"
@@ -179,7 +204,7 @@ bcftools concat \
     -f "$VCF_LIST" \
     -Oz \
     -o "$OUTPUT" \
-    --threads $TOTAL_CORES \
+    --threads "$TOTAL_CORES" \
     -a  # Allow overlaps (dla regionów które mogą się nakładać)
 
 #===============================================================================

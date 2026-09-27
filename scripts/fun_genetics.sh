@@ -4,13 +4,23 @@
 # Rzeczy ktorych jeszcze nie sprawdzilismy!
 #===============================================================================
 
-VCF="${1:-saryd_variants.vcf.gz}"
+# shellcheck source=lib/vcf_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/vcf_common.sh"
+set -eo pipefail
+
+VCF="${1:-}"
+hx_require_arg "$VCF" "$(basename "$0") <variants.vcf.gz>"
 
 echo "╔═══════════════════════════════════════════════════════════════════════════╗"
 echo "║           ZAAWANSOWANA ANALIZA GENETYCZNA                                 ║"
 echo "║           Ciekawe odkrycia z Twojego DNA                                  ║"
 echo "╚═══════════════════════════════════════════════════════════════════════════╝"
 echo ""
+
+# Wspolrzedne GRCh38 (scripts/lib/GRCh38_COORDINATES.md); biblioteka normalizuje
+# nazwy kontigow i buduje zindeksowana kopie robocza. hx_gt zwraca genotyp
+# pierwszego SNP (faza znormalizowana, brak wywolania = pusty).
+hx_prepare_vcf "$VCF"
 
 #===============================================================================
 # 1. DNA NEANDERTALCZYKA
@@ -26,28 +36,28 @@ echo ""
 NEANDER_COUNT=0
 
 # rs2066807 - BNC2 (jasna skora, od neandertalczykow)
-result=$(bcftools query -r 9:16817033 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 9:16817033)  # TODO(build): unverified GRCh38
 if [ "$result" == "0/1" ] || [ "$result" == "1/1" ]; then
     echo "  ✓ rs2066807 (BNC2): Wariant neandertalski - jasna skora"
     NEANDER_COUNT=$((NEANDER_COUNT + 1))
 fi
 
 # rs10490924 - zwiazany z neandertalczykami
-result=$(bcftools query -r 10:124214448 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 10:124214448)  # TODO(build): unverified GRCh38
 if [ "$result" == "0/1" ] || [ "$result" == "1/1" ]; then
     echo "  ✓ rs10490924: Wariant neandertalski (zwiazany z AMD)"
     NEANDER_COUNT=$((NEANDER_COUNT + 1))
 fi
 
 # rs3917862 - SELP (krzepniecie krwi, od neandertalczykow)
-result=$(bcftools query -r 1:169573470 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 1:169573470)  # TODO(build): unverified GRCh38
 if [ "$result" == "0/1" ] || [ "$result" == "1/1" ]; then
     echo "  ✓ rs3917862 (SELP): Wariant neandertalski - krzepniecie krwi"
     NEANDER_COUNT=$((NEANDER_COUNT + 1))
 fi
 
 # rs1042602 - TYR (pigmentacja)
-result=$(bcftools query -r 11:88911696 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 11:88911696)  # TODO(build): unverified GRCh38
 if [ "$result" == "0/1" ] || [ "$result" == "1/1" ]; then
     echo "  ✓ rs1042602 (TYR): Wariant pigmentacji (czesc neandertalska)"
     NEANDER_COUNT=$((NEANDER_COUNT + 1))
@@ -73,7 +83,7 @@ MORNING_SCORE=0
 EVENING_SCORE=0
 
 # rs12914385 - PER2 (zegar biologiczny)
-result=$(bcftools query -r 2:239186871 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 2:239186871)  # TODO(build): unverified GRCh38
 if [ "$result" == "1/1" ]; then
     echo "  rs12914385 (PER2): T/T → Tendencja do wczesnego wstawania"
     MORNING_SCORE=$((MORNING_SCORE + 2))
@@ -82,21 +92,21 @@ elif [ "$result" == "0/1" ]; then
 fi
 
 # rs1801260 - CLOCK (glowny gen zegara)
-result=$(bcftools query -r 4:56294068 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 4:56294068)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs1801260 (CLOCK): Wariant → Tendencja do poznego chodzenia spac"
     EVENING_SCORE=$((EVENING_SCORE + 2))
 fi
 
 # rs2304672 - PER3 (dlugosc snu)
-result=$(bcftools query -r 1:7870203 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 1:7870203)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs2304672 (PER3): Wariant → Krotszy sen, wieksza aktywnosc wieczorem"
     EVENING_SCORE=$((EVENING_SCORE + 1))
 fi
 
 # rs11121022 - ARNTL (regulacja rytmu)
-result=$(bcftools query -r 11:13387651 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 11:13387651)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs11121022 (ARNTL): Wariant → Wplywa na rytm dobowy"
 fi
@@ -120,8 +130,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # rs53576 - OXTR (receptor oksytocyny - "hormonu milosci")
-result=$(bcftools query -r 3:8804371 -f '%REF %ALT [%GT]\n' "$VCF" 2>/dev/null | head -1)
-GT=$(echo $result | awk '{print $3}')
+GT=$(hx_gt 3:8804371)  # TODO(build): unverified GRCh38
 
 if [ -n "$GT" ]; then
     case $GT in
@@ -143,7 +152,7 @@ fi
 echo ""
 
 # rs1800497 - DRD2 (receptor dopaminy - Taq1A)
-result=$(bcftools query -r 11:113400106 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 11:113400106)  # TODO(build): unverified GRCh38
 if [ -n "$result" ]; then
     case $result in
         "0/0"|"0|0")
@@ -167,7 +176,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # FTO - otylosc
-result=$(bcftools query -r 16:53820527 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 16:53786615)
 if [ -n "$result" ]; then
     case $result in
         "0/0"|"0|0")
@@ -184,21 +193,21 @@ if [ -n "$result" ]; then
 fi
 
 # APOA2 - nasycone tluszcze
-result=$(bcftools query -r 1:161222292 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 1:161222292)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs5082 (APOA2): Wariant → Wrazliwosc na tluszcze nasycone"
     echo "    → Rekomendacja: Ogranicz tluszcze nasycone (<22g/dzien)"
 fi
 
 # TCF7L2 - cukrzyca
-result=$(bcftools query -r 10:114758349 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 10:112998590)
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs7903146 (TCF7L2): Wariant → Podwyzszone ryzyko cukrzycy typu 2"
     echo "    → Rekomendacja: Dieta niskoglikemiczna, regularne posilki"
 fi
 
 # FADS1 - omega-3
-result=$(bcftools query -r 11:61567029 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 11:61567029)  # TODO(build): unverified GRCh38
 if [ -n "$result" ]; then
     case $result in
         "1/1"|"1|1")
@@ -209,7 +218,7 @@ if [ -n "$result" ]; then
 fi
 
 # BCMO1 - witamina A z beta-karotenu
-result=$(bcftools query -r 16:81264597 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 16:81264597)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs12934922 (BCMO1): Wariant → Slaba konwersja beta-karotenu do wit. A"
     echo "    → Rekomendacja: Jedz zrodla retinolu (watrobka, jaja) zamiast marchewki"
@@ -228,7 +237,7 @@ echo ""
 LONGEVITY_SCORE=0
 
 # FOXO3 - glowny gen dlugowiecznosci
-result=$(bcftools query -r 6:108989256 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 6:108989256)  # TODO(build): unverified GRCh38
 if [ -n "$result" ]; then
     case $result in
         "0/0"|"0|0")
@@ -248,15 +257,15 @@ if [ -n "$result" ]; then
 fi
 
 # CETP - cholesterol HDL
-result=$(bcftools query -r 16:57015091 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 16:57015091)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs5882 (CETP): Wariant → Wyzszy HDL (dobry cholesterol)"
     LONGEVITY_SCORE=$((LONGEVITY_SCORE + 1))
 fi
 
 # APOE (juz wczesniej sprawdzane, ale podsumujmy)
-APOE1=$(bcftools query -r 19:45411941 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
-APOE2=$(bcftools query -r 19:45412079 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+APOE1=$(hx_gt 19:44908684)
+APOE2=$(hx_gt 19:44908822)
 if [[ "$APOE1" == "0/0"* ]] && [[ "$APOE2" == "0/0"* ]]; then
     echo "  APOE: e3/e3 → OPTYMALNY dla dlugowiecznosci"
     LONGEVITY_SCORE=$((LONGEVITY_SCORE + 2))
@@ -266,7 +275,7 @@ elif [[ "$APOE2" == *"1"* ]]; then
 fi
 
 # TERT - telomeraza
-result=$(bcftools query -r 5:1287194 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 5:1287194)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs2736100 (TERT): Wariant → Potencjalnie dluzsze telomery"
     LONGEVITY_SCORE=$((LONGEVITY_SCORE + 1))
@@ -292,7 +301,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # COMT (juz mamy z poprzedniej analizy)
-result=$(bcftools query -r 22:19951271 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 22:19963748)
 if [ -n "$result" ]; then
     case $result in
         "0/0"|"0|0")
@@ -310,14 +319,14 @@ if [ -n "$result" ]; then
 fi
 
 # OPRM1 - receptor opioidowy
-result=$(bcftools query -r 6:154039662 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 6:154039662)
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs1799971 (OPRM1): Wariant G → Wieksza potrzeba opioidow"
     echo "    • Mniejsza odpowiedz na morfine"
 fi
 
 # SCN9A - kanal sodowy
-result=$(bcftools query -r 2:167138656 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 2:167138656)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs6746030 (SCN9A): Wariant → Zmieniona percepcja bolu"
 fi
@@ -333,13 +342,13 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # IL13 - alergie
-result=$(bcftools query -r 5:131995964 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 5:131995964)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs20541 (IL13): Wariant → Podwyzszone ryzyko alergii i astmy"
 fi
 
 # FLG - filagryna (atopowe zapalenie skory)
-result=$(bcftools query -r 1:152285861 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 1:152285861)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs61816761 (FLG): Wariant → Ryzyko AZS (atopowe zapalenie skory)"
 fi
@@ -358,7 +367,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # MMP1 - kolagen (zmarszczki)
-result=$(bcftools query -r 11:102660769 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 11:102660769)  # TODO(build): unverified GRCh38
 if [ -n "$result" ]; then
     case $result in
         "0/0"|"0|0")
@@ -372,13 +381,13 @@ if [ -n "$result" ]; then
 fi
 
 # STXBP5L - cellulit
-result=$(bcftools query -r 3:120819158 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 3:120819158)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs7636981 (STXBP5L): Wariant → Wieksze ryzyko cellulitu (kobiety)"
 fi
 
 # IRF4 - piegi/slonce
-result=$(bcftools query -r 6:396321 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 6:396321)
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs12203592 (IRF4): Wariant → Wieksze ryzyko uszkodzen slonecznych"
     echo "    → Rekomendacja: SPF 30+ codziennie!"
@@ -395,13 +404,13 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # GJD2 - krotkowzrocznosc
-result=$(bcftools query -r 15:35005886 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 15:35005886)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs634990 (GJD2): Wariant → Predyspozycja do krotkowzrocznosci"
 fi
 
 # RASGRF1 - krotkowzrocznosc
-result=$(bcftools query -r 15:79378016 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 15:79378016)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs8027411 (RASGRF1): Wariant → Zwiekszone ryzyko krotkowzrocznosci"
     echo "    → Rekomendacja: Czas na swiezym powietrzu zmniejsza ryzyko!"
@@ -418,7 +427,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # OR6A2 - kolendra (smakuje jak mydlo?)
-result=$(bcftools query -r 11:57820524 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 11:57820524)  # TODO(build): unverified GRCh38
 if [ -n "$result" ]; then
     case $result in
         "0/0"|"0|0")
@@ -434,17 +443,17 @@ fi
 # ADH1B - alkohol (juz sprawdzane)
 
 # ABCC11 - woskowina uszna / zapach ciala
-result=$(bcftools query -r 16:48258198 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 16:48224287)
 if [ -n "$result" ]; then
     case $result in
         "0/0"|"0|0")
-            echo "  rs17822931 (ABCC11): T/T → Mokra woskowina, normalny zapach ciala"
+            echo "  rs17822931 (ABCC11): C/C → Mokra woskowina, normalny zapach ciala"
             ;;
         "0/1")
-            echo "  rs17822931 (ABCC11): T/C → Mieszany typ"
+            echo "  rs17822931 (ABCC11): C/T → Mokra woskowina (allel mokry jest dominujacy)"
             ;;
         "1/1"|"1|1")
-            echo "  rs17822931 (ABCC11): C/C → Sucha woskowina, mniejszy zapach ciala"
+            echo "  rs17822931 (ABCC11): T/T → Sucha woskowina, mniejszy zapach ciala"
             echo "    • Ten wariant sprawia, ze dezodorant jest mniej potrzebny!"
             ;;
     esac
@@ -463,7 +472,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # BDNF - plastycznosc mozgu, uczenie sie
-result=$(bcftools query -r 11:27679916 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 11:27658369)
 if [ -n "$result" ]; then
     case $result in
         "0/0"|"0|0")
@@ -479,7 +488,7 @@ if [ -n "$result" ]; then
 fi
 
 # KIBRA - pamiec
-result=$(bcftools query -r 5:167791876 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 5:167791876)  # TODO(build): unverified GRCh38
 if [ -n "$result" ]; then
     case $result in
         "0/0"|"0|0")
@@ -493,7 +502,7 @@ if [ -n "$result" ]; then
 fi
 
 # SNAP25 - IQ / zdolnosci poznawcze
-result=$(bcftools query -r 20:10268206 -f '[%GT]\n' "$VCF" 2>/dev/null | head -1)
+result=$(hx_gt 20:10268206)  # TODO(build): unverified GRCh38
 if [ -n "$result" ] && [ "$result" != "0/0" ]; then
     echo "  rs363050 (SNAP25): Wariant → Zwiazany z wyzszym IQ"
 fi
@@ -511,3 +520,4 @@ echo ""
 echo "Te wyniki to tylko czesc Twojego genetycznego potencjalu!"
 echo "Pamietaj: geny to nie przeznaczenie - styl zycia ma ogromny wplyw."
 echo ""
+hx_report_coverage

@@ -11,7 +11,7 @@
 #    OPEN SOURCE GENETIC ANALYSIS TOOLKIT
 #    From BAM to Actionable Insights
 #
-#    Version: 1.0.1
+#    Version: 1.3.0
 #    License: MIT
 #    Repository: https://github.com/zd87pl/dna-analysis
 #
@@ -19,7 +19,8 @@
 
 set -o pipefail
 
-VERSION="1.0.1"
+VERSION="1.3.0"
+readonly VERSION
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$SCRIPT_DIR/scripts"
 
@@ -28,6 +29,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+# shellcheck disable=SC2034  # kept for menu colouring parity
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 WHITE='\033[1;37m'
@@ -38,7 +40,9 @@ VCF_FILE=""
 BAM_FILE=""
 REFERENCE=""
 OUTPUT_DIR="helixight_results"
-LANGUAGE="en"
+LANGUAGE="${HELIXIGHT_LANGUAGE:-en}"
+[[ "$LANGUAGE" == "pl" ]] || LANGUAGE="en"
+export HELIXIGHT_LANGUAGE="$LANGUAGE"
 
 #===============================================================================
 # UTILITY FUNCTIONS
@@ -47,10 +51,12 @@ LANGUAGE="en"
 # Validate file path - prevent command injection
 validate_path() {
     local path="$1"
-    local type="$2"  # "file" or "dir"
+    local type="$2"  # "file", "dir" or "any" (character check only)
 
-    # Check for null bytes or dangerous characters
-    if [[ "$path" =~ [\;\|\&\$\`\(\)\{\}\[\]\<\>] ]]; then
+    # Reject shell metacharacters, newlines and a leading '-' (would be parsed
+    # as an option by bcftools/samtools). Single-quoted so the backtick is literal.
+    local re='[;|&$`<>]'
+    if [[ -z "$path" || "$path" =~ $re || "$path" == -* || "$path" == *$'\n'* ]]; then
         echo -e "${RED}Error: Invalid characters in path${NC}" >&2
         return 1
     fi
@@ -80,17 +86,11 @@ validate_vcf() {
         echo -e "${YELLOW}Warning: File does not have .vcf or .vcf.gz extension${NC}" >&2
     fi
 
-    # Basic format check - look for VCF header
-    if [[ "$vcf" =~ \.gz$ ]]; then
-        if ! zcat "$vcf" 2>/dev/null | head -1 | grep -q "^##fileformat=VCF"; then
-            echo -e "${RED}Error: File does not appear to be a valid VCF${NC}" >&2
-            return 1
-        fi
-    else
-        if ! head -1 "$vcf" 2>/dev/null | grep -q "^##fileformat=VCF"; then
-            echo -e "${RED}Error: File does not appear to be a valid VCF${NC}" >&2
-            return 1
-        fi
+    # Basic format check - bcftools must be able to read the header
+    # (plain, gzip or BGZF). No zcat|head pipeline: that SIGPIPEs under pipefail.
+    if ! bcftools view -h "$vcf" >/dev/null 2>&1; then
+        echo -e "${RED}Error: File does not appear to be a valid VCF${NC}" >&2
+        return 1
     fi
 
     return 0
@@ -118,21 +118,12 @@ validate_bam() {
     return 0
 }
 
-# Cleanup function for temporary files
-cleanup() {
-    if [[ -n "${TEMP_DIR:-}" ]] && [[ -d "$TEMP_DIR" ]]; then
-        rm -rf "$TEMP_DIR"
-    fi
-}
-
-trap cleanup EXIT
-
 #===============================================================================
 # FUNCTIONS
 #===============================================================================
 
 print_banner() {
-    clear
+    [[ -t 1 ]] && clear
     echo -e "${CYAN}"
     cat << "EOF"
     ╔═══════════════════════════════════════════════════════════════════════════╗
@@ -172,7 +163,7 @@ print_menu() {
     echo -e "    ${GREEN}10)${NC} $(msg_en "🏃 Athletic & Fitness Genetics" "🏃 Genetyka sportowa i fitness")"
     echo -e "    ${GREEN}11)${NC} $(msg_en "🏊 Triathlon Predisposition Analysis" "🏊 Analiza predyspozycji do triathlonu")"
     echo -e "    ${GREEN}12)${NC} $(msg_en "💊 Personalized Protocol (training, supplements)" "💊 Spersonalizowany protokół (trening, suplementy)")"
-    echo -e "    ${GREEN}13)${NC} $(msg_en "🧬 Mega Analysis (500+ variants)" "🧬 Mega Analiza (500+ wariantów)")"
+    echo -e "    ${GREEN}13)${NC} $(msg_en "🧬 Mega Analysis (~80 variants, 10 sections)" "🧬 Mega Analiza (~80 wariantów, 10 sekcji)")"
     echo -e "    ${GREEN}14)${NC} $(msg_en "🎲 Fun Genetics (traits, ancestry hints)" "🎲 Zabawna Genetyka (cechy, pochodzenie)")"
     echo ""
     echo -e "  ${YELLOW}$(msg_en "HEALTH & CLINICAL" "ZDROWIE I KLINIKA")${NC}"
@@ -187,8 +178,8 @@ print_menu() {
     echo -e "    ${GREEN}32)${NC} $(msg_en "🤖 Prepare data for EVO2 AI analysis" "🤖 Przygotuj dane do analizy EVO2 AI")"
     echo ""
     echo -e "  ${YELLOW}$(msg_en "REPORTS" "RAPORTY")${NC}"
-    echo -e "    ${GREEN}40)${NC} $(msg_en "📄 Generate PDF Summary Report" "📄 Wygeneruj raport PDF")"
-    echo -e "    ${GREEN}41)${NC} $(msg_en "🔄 Run ALL analyses and generate full report" "🔄 Uruchom WSZYSTKIE analizy i wygeneruj pełny raport")"
+    echo -e "    ${GREEN}40)${NC} $(msg_en "📄 Generate summary report (text; PDF if pandoc is installed)" "📄 Wygeneruj raport zbiorczy (tekst; PDF jeśli zainstalowano pandoc)")"
+    echo -e "    ${GREEN}41)${NC} $(msg_en "🔄 Run the 9 VCF analyses (10-14, 20-23) and generate the summary report" "🔄 Uruchom 9 analiz VCF (10-14, 20-23) i wygeneruj raport zbiorczy")"
     echo ""
     echo -e "  ${YELLOW}$(msg_en "OTHER" "INNE")${NC}"
     echo -e "    ${GREEN}L)${NC}  $(msg_en "Change language (EN/PL)" "Zmień język (EN/PL)")"
@@ -213,12 +204,12 @@ print_menu() {
 check_dependencies() {
     echo -e "\n${YELLOW}$(msg_en "Checking dependencies..." "Sprawdzam zależności...")${NC}\n"
     
-    local deps=("bcftools" "samtools" "bgzip" "tabix" "wget" "gzip")
+    local deps=("bcftools" "samtools" "bgzip" "tabix" "wget" "gzip" "bc")
     local missing=()
     
     for dep in "${deps[@]}"; do
         if command -v "$dep" &> /dev/null; then
-            echo -e "  ${GREEN}✓${NC} $dep $(command -v $dep)"
+            echo -e "  ${GREEN}✓${NC} $dep $(command -v "$dep")"
         else
             echo -e "  ${RED}✗${NC} $dep - $(msg_en "NOT FOUND" "NIE ZNALEZIONO")"
             missing+=("$dep")
@@ -245,16 +236,18 @@ check_dependencies() {
         echo -e "${GREEN}$(msg_en "All required dependencies are installed!" "Wszystkie wymagane zależności są zainstalowane!")${NC}"
     fi
     
-    read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+    read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
 }
 
 install_dependencies() {
     echo -e "\n${YELLOW}$(msg_en "Installing dependencies..." "Instaluję zależności...")${NC}\n"
     
-    # Detect OS
+    # Detect OS. Never source /etc/os-release: it assigns VERSION, NAME, ID ...
+    # (VERSION is readonly here, so sourcing would even fail). Parse ID instead.
+    local OS
     if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS=$ID
+        OS=$(sed -n 's/^ID=//p' /etc/os-release | tr -d '"' | head -1)
+        OS=${OS:-unknown}
     elif [ -f /etc/debian_version ]; then
         OS="debian"
     elif [[ "$OSTYPE" == "darwin"* ]]; then
@@ -270,16 +263,16 @@ install_dependencies() {
         ubuntu|debian|pop)
             echo -e "${YELLOW}$(msg_en "Installing via apt..." "Instaluję przez apt...")${NC}"
             sudo apt-get update
-            sudo apt-get install -y bcftools samtools tabix wget gzip curl
+            sudo apt-get install -y bcftools samtools tabix wget gzip curl bc
             ;;
         fedora|centos|rhel)
             echo -e "${YELLOW}$(msg_en "Installing via dnf/yum..." "Instaluję przez dnf/yum...")${NC}"
-            sudo dnf install -y bcftools samtools htslib wget gzip curl || \
-            sudo yum install -y bcftools samtools htslib wget gzip curl
+            sudo dnf install -y bcftools samtools htslib wget gzip curl bc || \
+            sudo yum install -y bcftools samtools htslib wget gzip curl bc
             ;;
         arch|manjaro)
             echo -e "${YELLOW}$(msg_en "Installing via pacman..." "Instaluję przez pacman...")${NC}"
-            sudo pacman -S --noconfirm bcftools samtools htslib wget gzip curl
+            sudo pacman -S --noconfirm bcftools samtools htslib wget gzip curl bc
             ;;
         macos)
             echo -e "${YELLOW}$(msg_en "Installing via Homebrew..." "Instaluję przez Homebrew...")${NC}"
@@ -291,12 +284,12 @@ install_dependencies() {
             ;;
         *)
             echo -e "${RED}$(msg_en "Unknown OS. Please install manually:" "Nieznany system. Zainstaluj ręcznie:")${NC}"
-            echo "  bcftools, samtools, tabix, wget, gzip"
+            echo "  bcftools, samtools, tabix, wget, gzip, bc"
             ;;
     esac
     
     echo ""
-    read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+    read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
 }
 
 download_reference() {
@@ -305,10 +298,19 @@ download_reference() {
     echo -e "$(msg_en "This will download GRCh38 reference genome (~3GB compressed, ~15GB uncompressed)" "To pobierze genom referencyjny GRCh38 (~3GB skompresowany, ~15GB rozpakowany)")"
     echo ""
     
-    read -p "$(msg_en "Download directory [./reference]: " "Katalog pobierania [./reference]: ")" REF_DIR
+    read -r -p "$(msg_en "Download directory [./reference]: " "Katalog pobierania [./reference]: ")" REF_DIR
     REF_DIR=${REF_DIR:-./reference}
-    
-    mkdir -p "$REF_DIR"
+
+    # Character check only: the directory may not exist yet
+    if ! validate_path "$REF_DIR" "any"; then
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return 1
+    fi
+    if ! mkdir -p "$REF_DIR"; then
+        echo -e "${RED}$(msg_en "Cannot create directory:" "Nie można utworzyć katalogu:") $REF_DIR${NC}" >&2
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return 1
+    fi
     
     echo ""
     echo -e "${YELLOW}$(msg_en "Select reference source:" "Wybierz źródło referencji:")${NC}"
@@ -316,9 +318,10 @@ download_reference() {
     echo "  2) Ensembl"
     echo "  3) UCSC"
     
-    read -p "$(msg_en "Choice [1]: " "Wybór [1]: ")" ref_choice
+    read -r -p "$(msg_en "Choice [1]: " "Wybór [1]: ")" ref_choice
     ref_choice=${ref_choice:-1}
-    
+
+    local URL
     case $ref_choice in
         1)
             URL="https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz"
@@ -329,23 +332,51 @@ download_reference() {
         3)
             URL="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz"
             ;;
+        *)
+            echo -e "${RED}$(msg_en "Invalid choice" "Nieprawidłowy wybór")${NC}" >&2
+            read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+            return 1
+            ;;
     esac
-    
-    echo ""
-    echo -e "${CYAN}$(msg_en "Downloading..." "Pobieram...")${NC}"
-    wget -c "$URL" -O "$REF_DIR/GRCh38.fa.gz"
-    
-    echo -e "${CYAN}$(msg_en "Decompressing..." "Rozpakowuję...")${NC}"
-    gunzip -k "$REF_DIR/GRCh38.fa.gz"
-    
+
+    local gz="$REF_DIR/GRCh38.fa.gz"
+    local fa="$REF_DIR/GRCh38.fa"
+
+    # Every step is checked: the "ready" banner must only appear when the
+    # FASTA and its index really exist.
+    if [[ -f "$fa" ]]; then
+        echo -e "${YELLOW}$(msg_en "Reference already decompressed, skipping download:" "Referencja już rozpakowana, pomijam pobieranie:") $fa${NC}"
+    else
+        echo ""
+        echo -e "${CYAN}$(msg_en "Downloading..." "Pobieram...")${NC}"
+        if ! wget -c "$URL" -O "$gz"; then
+            rm -f "$gz"
+            echo -e "${RED}$(msg_en "Download failed" "Pobieranie nie powiodło się")${NC}" >&2
+            read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+            return 1
+        fi
+
+        echo -e "${CYAN}$(msg_en "Decompressing..." "Rozpakowuję...")${NC}"
+        if ! gunzip -k "$gz"; then
+            rm -f "$fa"
+            echo -e "${RED}$(msg_en "Decompression failed" "Rozpakowywanie nie powiodło się")${NC}" >&2
+            read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+            return 1
+        fi
+    fi
+
     echo -e "${CYAN}$(msg_en "Indexing..." "Indeksuję...")${NC}"
-    samtools faidx "$REF_DIR/GRCh38.fa"
-    
-    REFERENCE="$REF_DIR/GRCh38.fa"
+    if ! samtools faidx "$fa"; then
+        echo -e "${RED}$(msg_en "Indexing failed" "Indeksowanie nie powiodło się")${NC}" >&2
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return 1
+    fi
+
+    REFERENCE="$fa"
     echo ""
     echo -e "${GREEN}$(msg_en "Reference genome ready:" "Genom referencyjny gotowy:") $REFERENCE${NC}"
-    
-    read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+
+    read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
 }
 
 select_vcf() {
@@ -461,6 +492,22 @@ create_vcf_from_bam() {
     echo -e "$(msg_en "This may take several hours for WGS data." "To może potrwać kilka godzin dla danych WGS.")"
     echo ""
 
+    # The BAM's @SQ contig names must all exist in the reference: mpileup
+    # exits 0 and writes an empty VCF for a contig the reference lacks.
+    if [[ ! -f "$REFERENCE.fai" ]] && ! samtools faidx "$REFERENCE"; then
+        echo -e "${RED}$(msg_en "Cannot index reference:" "Nie można zindeksować referencji:") $REFERENCE${NC}" >&2
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return
+    fi
+    local missing_contigs
+    missing_contigs=$(samtools view -H "$BAM_FILE" | grep '^@SQ' | cut -f2 | sed 's/^SN://' \
+        | grep -vxF -f <(cut -f1 "$REFERENCE.fai") | head -5 | tr '\n' ' ')
+    if [[ -n "$missing_contigs" ]]; then
+        echo -e "${RED}$(msg_en "BAM contigs not present in the reference (check chr prefix / genome build):" "Kontigi BAM nieobecne w referencji (sprawdź prefiks chr / wersję genomu):") $missing_contigs${NC}" >&2
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return
+    fi
+
     case $method in
         1)
             # bcftools mpileup
@@ -523,65 +570,148 @@ create_vcf_from_bam() {
             ;;
     esac
 
-    if [[ -f "$output_name" ]]; then
+    # A VCF with a header but zero records is a failure, not a result
+    if [[ -f "$output_name" ]] && [[ -n "$(bcftools view -H "$output_name" 2>/dev/null | head -c1)" ]]; then
         VCF_FILE="$output_name"
         echo ""
         echo -e "${GREEN}$(msg_en "VCF created successfully:" "VCF utworzony pomyślnie:") $VCF_FILE${NC}"
     else
-        echo -e "${RED}$(msg_en "VCF creation failed!" "Tworzenie VCF nie powiodło się!")${NC}"
+        echo -e "${RED}$(msg_en "VCF creation failed (no variants written)!" "Tworzenie VCF nie powiodło się (brak wariantów)!")${NC}"
     fi
 
     read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
 }
 
+# Absolute path of an existing file (no realpath: absent on older macOS)
+abs_path() {
+    echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+}
+
+# Per-input results directory: $OUTPUT_DIR/<input name without .vcf*/.bam>
+run_dir_for() {
+    local base
+    base=$(basename "$1")
+    base=${base%%.vcf*}
+    base=${base%.bam}
+    base=${base%.cram}
+    echo "$OUTPUT_DIR/$base"
+}
+
+# Run scripts/$script inside the run directory, tee an ANSI-stripped copy of
+# its output to <script>.txt there and return the script's exit status.
+# Usage: run_script_in_dir INPUT SCRIPT [extra script args...]
+run_script_in_dir() {
+    local input="$1" script="$2"
+    shift 2
+    local input_abs run_dir rc esc
+    input_abs=$(abs_path "$input")
+    run_dir=$(run_dir_for "$input")
+    mkdir -p "$run_dir" || return 1
+    [ -x "$SCRIPTS_DIR/$script" ] || chmod +x "$SCRIPTS_DIR/$script"
+    esc=$(printf '\033')
+    (
+        cd "$run_dir" || exit 1
+        "$SCRIPTS_DIR/$script" "$input_abs" "$@" 2>&1 \
+            | sed "s/${esc}\[[0-9;]*m//g" \
+            | tee "${script%.sh}.txt"
+        exit "${PIPESTATUS[0]}"
+    )
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo -e "${RED}$(msg_en "Analysis failed (exit $rc):" "Analiza nie powiodła się (kod $rc):") $script${NC}" >&2
+    else
+        echo -e "${GREEN}$(msg_en "Results saved in:" "Wyniki zapisane w:") $run_dir${NC}"
+    fi
+    return "$rc"
+}
+
+# VCF analyses. Usage: run_analysis SCRIPT NAME [extra script args...]
 run_analysis() {
     local script="$1"
     local name="$2"
-    
+    shift 2
+
     if [ -z "$VCF_FILE" ]; then
         echo -e "${RED}$(msg_en "No VCF file selected! Use option 5 first." "Nie wybrano pliku VCF! Najpierw użyj opcji 5.")${NC}"
-        read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
         return
     fi
-    
+
     if [ ! -f "$SCRIPTS_DIR/$script" ]; then
         echo -e "${RED}$(msg_en "Script not found:" "Nie znaleziono skryptu:") $script${NC}"
-        read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
         return
     fi
-    
+
     echo -e "\n${CYAN}$(msg_en "Running:" "Uruchamiam:") $name${NC}\n"
-    
-    chmod +x "$SCRIPTS_DIR/$script"
-    "$SCRIPTS_DIR/$script" "$VCF_FILE"
-    
+
+    run_script_in_dir "$VCF_FILE" "$script" "$@"
+
     echo ""
-    read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+    read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+}
+
+# BAM-based analyses (STR, EVO2 data): these scripts take a BAM, not a VCF.
+# Usage: run_bam_analysis SCRIPT NAME
+run_bam_analysis() {
+    local script="$1"
+    local name="$2"
+
+    if [ -z "$BAM_FILE" ]; then
+        echo -e "${RED}$(msg_en "This analysis requires a BAM file. Set a BAM via option 4 first." "Ta analiza wymaga pliku BAM. Najpierw ustaw BAM w opcji 4.")${NC}"
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return
+    fi
+
+    if ! validate_bam "$BAM_FILE"; then
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return
+    fi
+
+    if [ ! -f "$SCRIPTS_DIR/$script" ]; then
+        echo -e "${RED}$(msg_en "Script not found:" "Nie znaleziono skryptu:") $script${NC}"
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return
+    fi
+
+    echo -e "\n${CYAN}$(msg_en "Running:" "Uruchamiam:") $name${NC}\n"
+
+    run_script_in_dir "$BAM_FILE" "$script"
+
+    echo ""
+    read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
 }
 
 generate_pdf_report() {
-    echo -e "\n${YELLOW}$(msg_en "Generating PDF Report" "Generowanie raportu PDF")${NC}\n"
-    
-    # Check if we have any results
-    local result_dirs=("athletic_analysis" "triathlon_analysis" "personalized_protocol" "mega_analysis_results" "clinvar_analysis" "cancer_genes_analysis")
-    local has_results=false
-    
-    for dir in "${result_dirs[@]}"; do
-        if [ -d "$dir" ]; then
-            has_results=true
-            break
-        fi
-    done
-    
-    if [ "$has_results" = false ]; then
-        echo -e "${YELLOW}$(msg_en "No analysis results found. Run some analyses first!" "Nie znaleziono wyników analiz. Najpierw uruchom analizy!")${NC}"
-        read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+    echo -e "\n${YELLOW}$(msg_en "Generating Summary Report" "Generowanie raportu zbiorczego")${NC}\n"
+
+    if [ -z "$VCF_FILE" ]; then
+        echo -e "${RED}$(msg_en "No VCF file selected! Use option 5 first." "Nie wybrano pliku VCF! Najpierw użyj opcji 5.")${NC}"
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
         return
     fi
-    
-    # Create combined report
-    local report_file="helixight_report_$(date +%Y%m%d_%H%M%S).txt"
-    
+
+    # Collect every text report written by run_analysis for this VCF
+    local run_dir
+    run_dir=$(run_dir_for "$VCF_FILE")
+    local result_files=()
+    if [ -d "$run_dir" ]; then
+        while IFS= read -r -d '' file; do
+            result_files+=("$file")
+        done < <(find "$run_dir" -type f -name '*.txt' ! -name 'helixight_report_*' -print0 2>/dev/null | sort -z)
+    fi
+
+    if [ ${#result_files[@]} -eq 0 ]; then
+        echo -e "${YELLOW}$(msg_en "No analysis results found. Run some analyses first!" "Nie znaleziono wyników analiz. Najpierw uruchom analizy!")${NC}"
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        return
+    fi
+
+    # Combined report lives OUTSIDE the run directory so it is never
+    # concatenated into the next report.
+    local report_file
+    report_file="$OUTPUT_DIR/helixight_report_$(basename "$run_dir")_$(date +%Y%m%d_%H%M%S).txt"
+
     {
         echo "================================================================================"
         echo "                    HELIXIGHT GENETIC ANALYSIS REPORT"
@@ -590,16 +720,14 @@ generate_pdf_report() {
         echo "================================================================================"
         echo ""
         
-        for dir in "${result_dirs[@]}"; do
-            if [ -d "$dir" ]; then
-                echo ""
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo "SECTION: $dir"
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo ""
-                cat "$dir"/*.txt 2>/dev/null || echo "(No text reports found)"
-                echo ""
-            fi
+        for file in "${result_files[@]}"; do
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "SECTION: ${file#"$run_dir"/}"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            cat "$file" 2>/dev/null || echo "(No text reports found)"
+            echo ""
         done
         
         echo ""
@@ -613,19 +741,22 @@ generate_pdf_report() {
     # Try to convert to PDF if pandoc is available
     if command -v pandoc &> /dev/null; then
         local pdf_file="${report_file%.txt}.pdf"
-        pandoc "$report_file" -o "$pdf_file" 2>/dev/null && \
+        if pandoc "$report_file" -o "$pdf_file"; then
             echo -e "${GREEN}$(msg_en "PDF generated:" "PDF wygenerowany:") $pdf_file${NC}"
+        else
+            echo -e "${YELLOW}$(msg_en "pandoc could not produce a PDF (a PDF engine such as LaTeX is required); the text report above is complete" "pandoc nie zdołał utworzyć PDF (wymagany silnik PDF, np. LaTeX); raport tekstowy powyżej jest kompletny")${NC}"
+        fi
     else
         echo -e "${YELLOW}$(msg_en "Install pandoc for PDF generation: sudo apt install pandoc" "Zainstaluj pandoc dla generowania PDF: sudo apt install pandoc")${NC}"
     fi
     
-    read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+    read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
 }
 
 run_all_analyses() {
     if [ -z "$VCF_FILE" ]; then
         echo -e "${RED}$(msg_en "No VCF file selected! Use option 5 first." "Nie wybrano pliku VCF! Najpierw użyj opcji 5.")${NC}"
-        read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+        read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
         return
     fi
     
@@ -645,16 +776,20 @@ run_all_analyses() {
         "fun_genetics.sh"
     )
     
+    local failed=()
     for script in "${scripts[@]}"; do
         if [ -f "$SCRIPTS_DIR/$script" ]; then
             echo -e "\n${YELLOW}━━━ Running: $script ━━━${NC}\n"
-            chmod +x "$SCRIPTS_DIR/$script"
-            "$SCRIPTS_DIR/$script" "$VCF_FILE"
+            run_script_in_dir "$VCF_FILE" "$script" || failed+=("$script")
         fi
     done
-    
+
     echo ""
-    echo -e "${GREEN}$(msg_en "All analyses complete!" "Wszystkie analizy zakończone!")${NC}"
+    if [ ${#failed[@]} -gt 0 ]; then
+        echo -e "${RED}$(msg_en "Analyses that failed:" "Analizy zakończone błędem:") ${failed[*]}${NC}"
+    else
+        echo -e "${GREEN}$(msg_en "All analyses complete!" "Wszystkie analizy zakończone!")${NC}"
+    fi
     
     # Generate report
     generate_pdf_report
@@ -672,7 +807,7 @@ $(msg_en "QUICK START:" "SZYBKI START:")
      - Create VCF from BAM (option 4), OR
      - Select existing VCF file (option 5)
   4. Run desired analyses (options 10-32)
-  5. Generate PDF report (option 40)
+  5. Generate summary report (option 40; text, PDF only if pandoc is installed)
 
 $(msg_en "ANALYSIS DESCRIPTIONS:" "OPISY ANALIZ:")
 
@@ -690,7 +825,7 @@ $(msg_en "ANALYSIS DESCRIPTIONS:" "OPISY ANALIZ:")
      - What to avoid (caffeine, alcohol, etc.)
   
   🧬 Mega Analysis
-     - 500+ genetic variants across 16 health domains
+     - ~80 genetic variants in 10 sections (Mega Analysis)
      - Pharmacogenomics, longevity, mental health
   
   🔬 ClinVar Scan
@@ -707,7 +842,7 @@ $(msg_en "MORE INFO:" "WIĘCEJ INFORMACJI:")
 
 EOF
     
-    read -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
+    read -r -p "$(msg_en "Press Enter to continue..." "Naciśnij Enter aby kontynuować...")"
 }
 
 toggle_language() {
@@ -716,6 +851,7 @@ toggle_language() {
     else
         LANGUAGE="en"
     fi
+    export HELIXIGHT_LANGUAGE="$LANGUAGE"
 }
 
 #===============================================================================
@@ -727,7 +863,9 @@ main() {
         print_banner
         print_menu
         
-        read -p "$(msg_en "Enter your choice: " "Wybierz opcję: ")" choice
+        # EOF (closed/non-interactive stdin) exits instead of looping forever;
+        # [[ -n $choice ]] keeps a last choice without trailing newline working.
+        read -r -p "$(msg_en "Enter your choice: " "Wybierz opcję: ")" choice || [[ -n $choice ]] || { echo; exit 0; }
         
         case $choice in
             1) install_dependencies ;;
@@ -739,7 +877,7 @@ main() {
             10) run_analysis "athletic_genetics.sh" "Athletic & Fitness Genetics" ;;
             11) run_analysis "triathlon_genetics.sh" "Triathlon Predisposition Analysis" ;;
             12) run_analysis "personalized_protocol.sh" "Personalized Protocol" ;;
-            13) run_analysis "mega_analysis.sh" "Mega Analysis (500+ variants)" ;;
+            13) run_analysis "mega_analysis.sh" "Mega Analysis (~80 variants, 10 sections)" ;;
             14) run_analysis "fun_genetics.sh" "Fun Genetics" ;;
             
             20) run_analysis "clinvar_scan.sh" "ClinVar Pathogenic Variant Scan" ;;
@@ -747,9 +885,9 @@ main() {
             22) run_analysis "polygenic_risk_scores.sh" "Polygenic Risk Scores" ;;
             23) run_analysis "rare_variants.sh" "Rare Variants Analysis" ;;
             
-            30) run_analysis "str_analysis.sh" "STR/Repeat Analysis" ;;
-            31) run_analysis "extract_mtdna_haplogrep.sh" "mtDNA Haplogroup" ;;
-            32) run_analysis "prepare_evo2_data.sh" "Prepare EVO2 Data" ;;
+            30) run_bam_analysis "str_analysis.sh" "STR/Repeat Analysis" ;;
+            31) run_analysis "extract_mtdna_haplogrep.sh" "mtDNA Haplogroup" "mtdna_analysis" ;;
+            32) run_bam_analysis "prepare_evo2_data.sh" "Prepare EVO2 Data" ;;
             
             40) generate_pdf_report ;;
             41) run_all_analyses ;;

@@ -22,7 +22,12 @@
 #
 #===============================================================================
 
-VCF="${1:-saryd_variants.vcf.gz}"
+# shellcheck source=lib/vcf_common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/vcf_common.sh"
+set -eo pipefail
+
+VCF="${1:-}"
+hx_require_arg "$VCF" "$(basename "$0") <variants.vcf.gz>"
 OUTDIR="personalized_protocol"
 mkdir -p "$OUTDIR"
 
@@ -35,13 +40,17 @@ echo "║                                                                       
 echo "╚═══════════════════════════════════════════════════════════════════════════════════════╝"
 echo ""
 
+# Wspolrzedne GRCh38 (scripts/lib/GRCh38_COORDINATES.md); biblioteka normalizuje
+# nazwy kontigow i buduje zindeksowana kopie robocza.
+hx_prepare_vcf "$VCF"
+
 #===============================================================================
 # FUNKCJE
 #===============================================================================
 
+# Genotyp pierwszego SNP na pozycji (faza znormalizowana, brak wywolania = pusty)
 check_snp() {
-    local pos="$1"
-    bcftools query -r "$pos" -f '[%GT]\n' "$VCF" 2>/dev/null | head -1
+    hx_gt "$1"
 }
 
 # Inicjalizacja zmiennych profilowych
@@ -104,20 +113,25 @@ fi
 
 # ACE I/D - wytrzymalosc vs sila
 echo "Analizuje ACE (uklad renina-angiotensyna)..."
-GT=$(check_snp "17:63488529")
-if [ -n "$GT" ]; then
+# rs4646994 Alu I/D (17:63488529): REF zawiera insercje (I), ALT = delecja (D),
+# wiec 0/0 = I/I, 1/1 = D/D. Liczy sie tylko rekord indelu >= 250 bp.
+ACE_REC=$(hx_gt_indel "17:63488529" 250)
+GT=${ACE_REC##* }
+if [ -n "$ACE_REC" ]; then
     case $GT in
-        "1/1"|"1|1")
+        "0/0")
             ENDURANCE_SCORE=$((ENDURANCE_SCORE + 2))
             echo "  ACE: I/I → Lepsza wydajnosc tlenowa"
             TRAINING_RECS+=("TLEN: ACE I/I = lepsza kapilaryzacja. Wlacz dlugie sesje cardio (60-90 min) do programu.")
             ;;
-        "0/0"|"0|0")
+        "1/1")
             POWER_SCORE=$((POWER_SCORE + 2))
             echo "  ACE: D/D → Lepsza sila i hipertrofia"
             TRAINING_RECS+=("HIPERTROFIA: ACE D/D = lepsza odpowiedz hipertroficzna. Skup sie na progresji ciezaru.")
             ;;
     esac
+else
+    echo "  ACE I/D: nie genotypowano (brak rekordu indelu Alu w VCF)"
 fi
 
 # PPARGC1A - biogeneza mitochondriow
@@ -150,6 +164,7 @@ if [ -n "$GT" ]; then
             ;;
         "1/1"|"1|1")
             RECOVERY_SPEED="slow"
+            # shellcheck disable=SC2034  # informational, not used in scoring yet
             INFLAMMATION_LEVEL="high"
             echo "  IL6: C/C → Wolniejsza regeneracja, wiecej DOMS"
             TRAINING_RECS+=("REGENERACJA: IL6 C/C = wolniejsza regeneracja. Potrzebujesz 72h+ miedzy ciezkimi sesjami.")
@@ -162,7 +177,7 @@ fi
 
 # SOD2 - stres oksydacyjny
 echo "Analizuje SOD2 (antyoksydanty)..."
-GT=$(check_snp "6:160113872")
+GT=$(check_snp "6:159692840")
 if [ -n "$GT" ]; then
     case $GT in
         "0/1"|"0|1"|"1/0"|"1|0")
@@ -181,16 +196,15 @@ fi
 
 # COL1A1 i COL5A1 - ryzyko kontuzji
 echo "Analizuje geny kolagenu (kontuzje)..."
-GT=$(check_snp "17:50201632")
+GT=$(check_snp "17:50201632")  # TODO(build): unverified GRCh38
 COL_RISK=0
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
     COL_RISK=$((COL_RISK + 1))
 fi
 
-GT=$(check_snp "9:137684151")
-if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
-    COL_RISK=$((COL_RISK + 1))
-fi
+# COL5A1 rs12722 nie jest sprawdzany: dawna pozycja 9:137684151 lezy ~2,8 Mb
+# poza COL5A1 w GRCh38 (wspolrzedna z zakresu GRCh37), brak zweryfikowanej.
+echo "  COL5A1 rs12722: pozycja niezweryfikowana - pominieto"
 
 if [ $COL_RISK -ge 1 ]; then
     INJURY_RISK="elevated"
@@ -204,7 +218,7 @@ fi
 
 # COMT - odpornosc na stres
 echo "Analizuje COMT (stres i dopamina)..."
-GT=$(check_snp "22:19951271")
+GT=$(check_snp "22:19963748")
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -232,7 +246,7 @@ fi
 
 # BDNF - plastycznosc mozgu i uczenie sie ruchowe
 echo "Analizuje BDNF (plastycznosc mozgu)..."
-GT=$(check_snp "11:27679916")
+GT=$(check_snp "11:27658369")
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -260,7 +274,7 @@ echo ""
 
 # FTO - otylosc
 echo "Analizuje FTO (metabolizm energetyczny)..."
-GT=$(check_snp "16:53820527")
+GT=$(check_snp "16:53786615")
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -281,8 +295,9 @@ fi
 
 # TCF7L2 - weglowodany i cukrzyca
 echo "Analizuje TCF7L2 (metabolizm weglowodanow)..."
-GT=$(check_snp "10:114758349")
+GT=$(check_snp "10:112998590")
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
+    # shellcheck disable=SC2034  # informational, not used in scoring yet
     CARB_SENSITIVITY="high"
     echo "  TCF7L2: Wariant ryzyka → Gorsza tolerancja weglowodanow"
     NUTRITION_RECS+=("WEGLOWODANY: TCF7L2 wariant = ogranicz weglowodany proste. Max 150-200g/dzien.")
@@ -293,8 +308,9 @@ fi
 
 # APOA2 - tluszcze nasycone
 echo "Analizuje APOA2 (metabolizm tluszczow)..."
-GT=$(check_snp "1:161222292")
+GT=$(check_snp "1:161222292")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
+    # shellcheck disable=SC2034  # informational, not used in scoring yet
     FAT_SENSITIVITY="high"
     echo "  APOA2: Wariant → Wrazliwosc na tluszcze nasycone"
     NUTRITION_RECS+=("TLUSZCZE NASYCONE: APOA2 wariant = ogranicz do <20g/dzien.")
@@ -304,7 +320,7 @@ fi
 
 # CYP1A2 - kofeina
 echo "Analizuje CYP1A2 (metabolizm kofeiny)..."
-GT=$(check_snp "15:75041917")
+GT=$(check_snp "15:74749576")
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -331,7 +347,7 @@ fi
 
 # MTHFR - metabolizm folianu
 echo "Analizuje MTHFR (metabolizm folianu i metylacja)..."
-GT=$(check_snp "1:11856378")
+GT=$(check_snp "1:11796321")
 MTHFR_STATUS=""
 if [ -n "$GT" ]; then
     case $GT in
@@ -342,17 +358,17 @@ if [ -n "$GT" ]; then
         "0/1"|"0|1"|"1/0"|"1|0")
             MTHFR_STATUS="hetero"
             echo "  MTHFR C677T: C/T → Obnizony metabolizm (65% aktywnosci)"
-            SUPPLEMENT_RECS+=("FOLIAN: L-metylofolian 400-800mcg/dzien (NIE kwas foliowy!)")
+            SUPPLEMENT_RECS+=("FOLIAN: L-metylofolian 400-800mcg/dzien to opcja, nie koniecznosc - kwas foliowy pozostaje skuteczny")
             SUPPLEMENT_RECS+=("B12: Metylokobalamina 1000mcg/dzien")
             ;;
         "1/1"|"1|1")
             MTHFR_STATUS="homo"
             echo "  MTHFR C677T: T/T → Znacznie obnizony metabolizm (30% aktywnosci)!"
-            SUPPLEMENT_RECS+=("FOLIAN: L-metylofolian 800-1000mcg/dzien - KRYTYCZNE przy T/T!")
+            SUPPLEMENT_RECS+=("FOLIAN: L-metylofolian 800-1000mcg/dzien jest opcja, nie koniecznoscia - kwas foliowy pozostaje skuteczny; ACMG nie zaleca zmian postepowania na podstawie MTHFR C677T")
             SUPPLEMENT_RECS+=("B12: Metylokobalamina 1000-2000mcg/dzien")
             SUPPLEMENT_RECS+=("B6: P-5-P (aktywna forma) 25-50mg/dzien")
             SUPPLEMENT_RECS+=("BETAINA (TMG): 500-1000mg/dzien - wspiera alternatywna sciezke metylacji")
-            AVOID_RECS+=("UNIKAJ kwasu foliowego (fortyfikowana zywnosc, tanie suplementy) - nie przetworzysz go!")
+            NUTRITION_RECS+=("FOLIAN: osoby w ciazy / planujace ciaze NIE powinny odstawiac kwasu foliowego (profilaktyka wad cewy nerwowej)")
             NUTRITION_RECS+=("ZIELONE LISCIASTE: Duzo szpinaku, jarmuzu - naturalne zrodlo folianu")
             ;;
     esac
@@ -360,7 +376,7 @@ fi
 
 # VDR - witamina D
 echo "Analizuje VDR (receptor witaminy D)..."
-GT=$(check_snp "12:48272895")
+GT=$(check_snp "12:47846052")
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
     echo "  VDR: Wariant → Wieksze zapotrzebowanie na wit. D"
     SUPPLEMENT_RECS+=("WITAMINA D3: 4000-5000 IU/dzien (wiecej niz standardowe 1000-2000)")
@@ -369,7 +385,7 @@ fi
 
 # FADS1 - omega-3
 echo "Analizuje FADS1 (konwersja omega-3)..."
-GT=$(check_snp "11:61567029")
+GT=$(check_snp "11:61567029")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ]; then
     if [[ "$GT" == "1/1" ]] || [[ "$GT" == "1|1" ]]; then
         echo "  FADS1: T/T → Slaba konwersja ALA do EPA/DHA"
@@ -381,7 +397,7 @@ fi
 
 # BCMO1 - witamina A
 echo "Analizuje BCMO1 (konwersja beta-karotenu)..."
-GT=$(check_snp "16:81264597")
+GT=$(check_snp "16:81264597")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
     echo "  BCMO1: Wariant → Slaba konwersja beta-karotenu do wit. A"
     SUPPLEMENT_RECS+=("WITAMINA A: Retinol 2500-5000 IU/dzien LUB jedz watrobke 1x/tydzien")
@@ -390,7 +406,7 @@ fi
 
 # FUT2 - witamina B12
 echo "Analizuje FUT2 (wchłanianie B12)..."
-GT=$(check_snp "19:49206674")
+GT=$(check_snp "19:49206674")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
     echo "  FUT2: Non-secretor → Nizsze wchlanianie B12"
     SUPPLEMENT_RECS+=("B12: Wyzsza dawka metylokobalaminy 1000-2000mcg/dzien lub zastrzyki")
@@ -398,20 +414,24 @@ fi
 
 # ADH1B/ALDH2 - alkohol
 echo "Analizuje metabolizm alkoholu..."
-GT=$(check_snp "12:112241766")
+GT=$(check_snp "12:111803962")
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
     echo "  ALDH2: Wariant → Asian flush, nietolerancja alkoholu!"
     AVOID_RECS+=("ALKOHOL: Calkowicie unikaj! ALDH2 wariant = toksyczne aldehydy + ryzyko raka przeluku")
 fi
 
-GT=$(check_snp "4:99318162")
-if [ -n "$GT" ] && [[ "$GT" == "0/0" ]]; then
-    echo "  ADH1B: Wolny metabolizm alkoholu"
+# rs1229984 T>C: REF T = His48 = ADH1B*2 (szybki), ALT C = Arg48 = ADH1B*1;
+# wolny metabolizm = C/C (dawka C = 2), nie 0/0.
+# TODO(build): unverified GRCh38 orientation (table row is 'unverified')
+RES=$(hx_gt_allele 4:99318162 T C rs1229984)
+DOS=${RES%%$'\t'*}
+if [ -n "$DOS" ] && [ "$DOS" -eq 2 ]; then
+    echo "  ADH1B: Wolny metabolizm alkoholu (C/C, *1/*1)"
     AVOID_RECS+=("ALKOHOL: Ogranicz - wolny metabolizm = wieksze ryzyko uzaleznienia i uszkodzen")
 fi
 
 # Laktozaecho "Analizuje LCT (tolerancja laktozy)..."
-GT=$(check_snp "2:136608646")
+GT=$(check_snp "2:135851076")
 if [ -n "$GT" ]; then
     case $GT in
         "0/0"|"0|0")
@@ -440,7 +460,7 @@ echo ""
 
 # SHBG - globulina wiazaca hormony
 echo "Analizuje SHBG (transport hormonow)..."
-GT=$(check_snp "17:7534706")
+GT=$(check_snp "17:7534706")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
     echo "  SHBG: Wariant → Moze wplywac na poziom wolnego testosteronu"
     HORMONE_NOTES+=("SHBG: Wariant moze oznaczac wyzszy SHBG = mniej wolnego testosteronu. Badaj FT nie tylko TT.")
@@ -452,7 +472,7 @@ HORMONE_NOTES+=("AR: Dlugosc CAG wplywa na wrazliwosc na androgeny. Krotsze = wi
 
 # CYP19A1 - aromataza
 echo "Analizuje CYP19A1 (aromataza)..."
-GT=$(check_snp "15:51502956")
+GT=$(check_snp "15:51502956")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
     echo "  CYP19A1: Wariant → Moze wplywac na konwersje T→E2"
     HORMONE_NOTES+=("AROMATAZA: Wariant CYP19A1 - monitoruj stosunek T/E2. Moze wymagac modulacji.")
@@ -461,13 +481,13 @@ fi
 
 # SRD5A2 - 5-alfa reduktaza
 echo "Analizuje SRD5A2 (5-alfa reduktaza)..."
-GT=$(check_snp "2:31749strona")
-# Pozycja przykladowa
+# Pozycja SRD5A2 (rs523349 V89L) niezweryfikowana - genotyp nie jest odczytywany,
+# zostaje tylko ogolna notatka (poprzedni literal "2:31749strona" nie byl regionem).
 HORMONE_NOTES+=("5AR: Aktywnosc 5-alfa reduktazy wplywa na konwersje T→DHT (lysienie, prostata, sila).")
 
 # CYP17A1 - synteza androgenow
 echo "Analizuje CYP17A1 (synteza androgenow)..."
-GT=$(check_snp "10:102830531")
+GT=$(check_snp "10:102830531")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
     HORMONE_NOTES+=("CYP17A1: Wariant moze wplywac na synteze androgenow nadnerczowych (DHEA, androstendion).")
 fi
@@ -493,12 +513,12 @@ echo ""
 MORNING_SCORE=0
 EVENING_SCORE=0
 
-GT=$(check_snp "2:239186871")  # PER2
+GT=$(check_snp "2:239186871")  # PER2  # TODO(build): unverified GRCh38
 if [[ "$GT" == "1/1" ]]; then
     MORNING_SCORE=$((MORNING_SCORE + 2))
 fi
 
-GT=$(check_snp "4:56294068")  # CLOCK
+GT=$(check_snp "4:56294068")  # CLOCK  # TODO(build): unverified GRCh38
 if [[ "$GT" != "0/0" ]] && [ -n "$GT" ]; then
     EVENING_SCORE=$((EVENING_SCORE + 2))
 fi
@@ -517,7 +537,7 @@ else
 fi
 
 # ADA - sen głęboki
-GT=$(check_snp "20:44619933")
+GT=$(check_snp "20:44619933")  # TODO(build): unverified GRCh38
 if [ -n "$GT" ] && [[ "$GT" != "0/0" ]]; then
     echo "  ADA: Wariant → Wiecej snu glebokiego"
     LIFESTYLE_RECS+=("SEN: Twoj wariant ADA = potrzebujesz wiecej snu (8-9h). Nie skracaj!")
@@ -619,6 +639,7 @@ REPORT="$OUTDIR/PROTOCOL_$(date +%Y%m%d).txt"
 echo "================================================================================"
 echo "          SPERSONALIZOWANY PROTOKOL GENETYCZNY"
 echo "          Wygenerowano: $(date)"
+echo "          VCF: $VCF"
 echo "================================================================================"
 echo ""
 echo "PROFIL:"
@@ -663,3 +684,4 @@ echo "    Nie zastępują porady lekarza, dietetyka ani trenera."
 echo "    Hormonoterapia wymaga ZAWSZE nadzoru specjalisty!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
+hx_report_coverage

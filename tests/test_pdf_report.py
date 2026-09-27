@@ -2,15 +2,10 @@
 Unit tests for the PDF report generation module
 """
 
-import os
-import sys
 import pytest
 
-# Add frontend to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'frontend'))
-
 from analysis import AnalysisStatus, AnalysisResult
-from pdf_report import generate_pdf_report, HelixightReport
+from pdf_report import generate_pdf_report, HelixightReport, _to_latin1
 
 
 class TestHelixightReport:
@@ -19,7 +14,7 @@ class TestHelixightReport:
     def test_report_initialization(self):
         """Test PDF report can be initialized"""
         report = HelixightReport()
-        assert report is not None
+        assert report.page_no() == 0
 
     def test_add_page(self):
         """Test adding a page"""
@@ -33,6 +28,7 @@ class TestHelixightReport:
         report.add_page()
         # Should not raise
         report.chapter_title("Test Chapter", "🧬")
+        assert report.page_no() == 1
 
     def test_add_score_bar(self):
         """Test adding score bar"""
@@ -40,6 +36,33 @@ class TestHelixightReport:
         report.add_page()
         # Should not raise
         report.add_score_bar("Test Score", 75)
+        assert report.page_no() == 1
+
+    def test_add_score_bar_non_latin1_name(self):
+        """Polish score names from triathlon_genetics.sh must not crash the core font"""
+        report = HelixightReport()
+        report.add_page()
+        report.add_score_bar("PŁYWANIE", 60)
+        assert report.page_no() == 1
+
+    def test_add_score_bar_out_of_range(self):
+        """Percentages outside 0-100 are clamped instead of drawing off the page"""
+        report = HelixightReport()
+        report.add_page()
+        # fpdf2 happily draws a 250-wide or negative-width rect, so record the
+        # widths actually passed to rect(): background, fill, background, fill.
+        widths = []
+        orig_rect = report.rect
+
+        def spy_rect(x, y, w, h, *args, **kwargs):
+            widths.append(w)
+            return orig_rect(x, y, w, h, *args, **kwargs)
+
+        report.rect = spy_rect
+        report.add_score_bar("Too big", 250)
+        report.add_score_bar("Negative", -5)
+        assert report.page_no() == 1
+        assert widths == [100, 100, 100, 0]
 
     def test_add_finding(self):
         """Test adding findings"""
@@ -49,6 +72,36 @@ class TestHelixightReport:
         report.add_finding("Test finding", "info")
         report.add_finding("Positive finding", "positive")
         report.add_finding("Warning finding", "warning")
+        assert report.page_no() == 1
+
+    def test_consecutive_findings_do_not_crash(self):
+        """Two consecutive multi_cell(0, ...) calls used to leave zero width for the second"""
+        report = HelixightReport()
+        report.add_page()
+        for i in range(5):
+            report.add_finding(f"⚠️ finding number {i} with some longer text to wrap " * 3, "warning")
+        assert report.page_no() >= 1
+
+
+class TestToLatin1:
+    """Tests for the core-font sanitiser"""
+
+    def test_markers_become_ascii_tags(self):
+        assert _to_latin1("✅ ok") == "[OK] ok"
+        assert _to_latin1("🔴 hit") == "[!] hit"
+        assert _to_latin1("⚠️ warn") == "[!] warn"
+        assert _to_latin1("❌ no") == "[X] no"
+        # Control characters (ANSI escapes that slipped through) never reach the PDF
+        assert _to_latin1("\x1b[0;32m ✅ ok\x1b[0m") == "[0;32m [OK] ok[0m"
+        assert "\x1b" not in _to_latin1("\x1b[0;32m ok")
+
+    def test_polish_letters(self):
+        assert _to_latin1("PŁYWANIE żółć") == "PLYWANIE zolc"
+
+    def test_result_is_latin1_encodable(self):
+        text = _to_latin1("🧬 genom_łukasza → wynik ≈ 5 — ß 🏃")
+        text.encode('latin-1')  # must not raise
+        assert "genom_lukasza -> wynik ~ 5 - ss" in text
 
 
 class TestGeneratePDFReport:
@@ -100,7 +153,7 @@ class TestGeneratePDFReport:
             analyses_metadata=sample_metadata
         )
 
-        assert pdf_bytes is not None
+        assert isinstance(pdf_bytes, bytes)
         assert len(pdf_bytes) > 0
         # PDF files start with %PDF
         assert pdf_bytes[:4] == b'%PDF'
@@ -124,7 +177,7 @@ class TestGeneratePDFReport:
             vcf_metrics=vcf_metrics
         )
 
-        assert pdf_bytes is not None
+        assert isinstance(pdf_bytes, bytes)
         assert len(pdf_bytes) > 0
         assert pdf_bytes[:4] == b'%PDF'
 
@@ -136,7 +189,7 @@ class TestGeneratePDFReport:
             analyses_metadata=sample_metadata
         )
 
-        assert pdf_bytes is not None
+        assert isinstance(pdf_bytes, bytes)
         assert pdf_bytes[:4] == b'%PDF'
 
     def test_generate_pdf_failed_analysis(self, sample_metadata):
@@ -155,7 +208,7 @@ class TestGeneratePDFReport:
             analyses_metadata=sample_metadata
         )
 
-        assert pdf_bytes is not None
+        assert isinstance(pdf_bytes, bytes)
         assert pdf_bytes[:4] == b'%PDF'
 
     def test_generate_pdf_special_characters(self, sample_metadata):
@@ -179,7 +232,39 @@ class TestGeneratePDFReport:
             analyses_metadata=sample_metadata
         )
 
-        assert pdf_bytes is not None
+        assert isinstance(pdf_bytes, bytes)
+        assert pdf_bytes[:4] == b'%PDF'
+
+    def test_generate_pdf_findings_and_warnings(self, sample_metadata):
+        """Three findings plus two warnings render as consecutive multi_cells"""
+        results = {
+            "fun_genetics": AnalysisResult(
+                name="Fun Genetics",
+                status=AnalysisStatus.COMPLETED,
+                findings=["⚠️ a", "⚠️ b", "✅ No pathogenic variants found"],
+                warnings=["⚠️ first warning", "⚠️ second warning"],
+                scores={"PŁYWANIE": {"value": 3, "max": 5, "percentage": 60}},
+            )
+        }
+
+        pdf_bytes = generate_pdf_report(
+            vcf_filename="test.vcf",
+            results=results,
+            analyses_metadata=sample_metadata
+        )
+
+        assert isinstance(pdf_bytes, bytes)
+        assert pdf_bytes[:4] == b'%PDF'
+
+    def test_generate_pdf_non_latin1_filename(self, sample_results, sample_metadata):
+        """A VCF file name outside latin-1 must not crash the title page"""
+        pdf_bytes = generate_pdf_report(
+            vcf_filename="genom_łukasza_🧬.vcf.gz",
+            results=sample_results,
+            analyses_metadata=sample_metadata
+        )
+
+        assert isinstance(pdf_bytes, bytes)
         assert pdf_bytes[:4] == b'%PDF'
 
 
